@@ -75,7 +75,9 @@ public class WeWorkRemotelyFetcher implements FeedFetcher {
     public WeWorkRemotelyFetcher(IngestProperties props) {
         this.props = props;
         this.client = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                // These URLs are constants, but a redirect could still carry the
+                // request somewhere else; NORMAL would follow it silently.
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
     }
@@ -121,7 +123,13 @@ public class WeWorkRemotelyFetcher implements FeedFetcher {
     }
 
     private String fetchXml(String url) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+        URI uri = URI.create(url);
+        if (!"https".equalsIgnoreCase(uri.getScheme())
+                || !"weworkremotely.com".equalsIgnoreCase(uri.getHost())) {
+            throw new IllegalArgumentException("refusing URL outside the feed host: " + url);
+        }
+
+        HttpRequest request = HttpRequest.newBuilder(uri)
                 .header("User-Agent", props.userAgent())
                 .header("Accept", "application/rss+xml, application/xml, text/xml")
                 .timeout(props.requestTimeout())

@@ -40,6 +40,10 @@ public class AshbyFetcher implements AtsFetcher {
 
     @Override
     public List<FetchedPosting> fetch(Company company) throws Exception {
+        if (!AtsHttp.isSafeToken(company.atsToken())) {
+            throw new IllegalArgumentException(
+                    "refusing unsafe board token for company " + company.id());
+        }
         JsonNode root = http.getJson(URL.formatted(company.atsToken()));
         JsonNode jobs = root.get("jobs");
         if (jobs == null || !jobs.isArray()) {
