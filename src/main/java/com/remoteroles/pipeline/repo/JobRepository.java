@@ -37,7 +37,7 @@ public class JobRepository {
     public UpsertOutcome upsert(CanonicalJob job) {
         Boolean created = db.sql("""
                         insert into jobs (
-                            company_id, ats_type, external_id, content_hash,
+                            company_id, company_name, ats_type, external_id, content_hash,
                             title, description_html, apply_url, location_raw,
                             is_remote, geo_scope, geo_detail, timezone_requirement,
                             classification_confidence, classified_by,
@@ -46,7 +46,7 @@ public class JobRepository {
                             salary_min, salary_max, salary_currency, salary_period,
                             first_seen_at, last_seen_at
                         ) values (
-                            :companyId, :atsType, :externalId, :contentHash,
+                            :companyId, :companyName, :atsType, :externalId, :contentHash,
                             :title, :descriptionHtml, :applyUrl, :locationRaw,
                             :isRemote, :geoScope, :geoDetail, :timezoneRequirement,
                             :confidence, :classifiedBy,
@@ -57,6 +57,7 @@ public class JobRepository {
                         )
                         on conflict (company_id, external_id) do update set
                             content_hash              = excluded.content_hash,
+                            company_name              = excluded.company_name,
                             title                     = excluded.title,
                             description_html          = excluded.description_html,
                             apply_url                 = excluded.apply_url,
@@ -85,6 +86,7 @@ public class JobRepository {
                         returning (xmax = 0) as created
                         """)
                 .param("companyId", job.companyId())
+                .param("companyName", job.companyName())
                 .param("atsType", job.atsType().name())
                 .param("externalId", job.externalId())
                 .param("contentHash", job.contentHash())

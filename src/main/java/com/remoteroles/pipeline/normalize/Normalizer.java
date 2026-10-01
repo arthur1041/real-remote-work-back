@@ -32,6 +32,7 @@ public class Normalizer {
 
         return new CanonicalJob(
                 company.id(),
+                company.name(),
                 company.atsType(),
                 posting.externalId(),
                 contentHash,
