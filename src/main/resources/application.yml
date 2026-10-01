@@ -45,6 +45,26 @@ ingest:
     # :00 and these are other people's servers.
     cron: ${INGEST_CRON:0 17 4 * * *}
 
+# Newsletter. Collection is live; delivery is not.
+#
+# delivery.enabled stays false until there is SMTP and a verified sending domain.
+# While it is false the only Mailer bean is LoggingMailer, which sends nothing, and
+# every captured address stays PENDING -- unconfirmed, and not a mailing list.
+newsletter:
+  delivery:
+    enabled: ${NEWSLETTER_DELIVERY_ENABLED:false}
+  from-address: ${NEWSLETTER_FROM_ADDRESS:hello@example.com}
+  from-name: ${NEWSLETTER_FROM_NAME:Remote Roles}
+  site-url: ${SITE_URL:http://localhost:3000}
+
+# SMTP, for when delivery is switched on. Left unset on purpose: Spring's mail
+# auto-configuration is inert without a host, so nothing tries to connect.
+# spring.mail.host: smtp.example.com
+# spring.mail.port: 587
+# spring.mail.username: ...
+# spring.mail.password: ...
+# spring.mail.properties.mail.smtp.starttls.enable: true
+
 logging:
   level:
     com.remoteroles: INFO
