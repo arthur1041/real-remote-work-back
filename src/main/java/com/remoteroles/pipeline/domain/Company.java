@@ -12,5 +12,10 @@ public record Company(
         String status,
         int consecutiveFailures,
         Instant lastFetchedAt,
-        Instant lastSuccessAt
-) {}
+        Instant lastSuccessAt,
+        String sourceKind
+) {
+    public boolean isFeed() {
+        return "FEED".equals(sourceKind);
+    }
+}

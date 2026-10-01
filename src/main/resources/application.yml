@@ -31,6 +31,14 @@ ingest:
   request-timeout: 30s
   # Boards that fail this many times in a row get retired to DEAD.
   max-consecutive-failures: 8
+  # Aggregator crawl budget. WeWorkRemotely is a dozen whole-file requests and
+  # ignores these. Himalayas is paginated behind Cloudflare and starts refusing
+  # after ~60 requests, so each run walks a small slice and resumes next time.
+  feed:
+    max-pages: ${INGEST_FEED_MAX_PAGES:50}
+    concurrency: ${INGEST_FEED_CONCURRENCY:1}
+    pause-millis: ${INGEST_FEED_PAUSE_MS:400}
+
   schedule:
     enabled: ${INGEST_SCHEDULE_ENABLED:true}
     # Every day at 04:17 UTC. Off-the-hour on purpose: everybody's cron fires at

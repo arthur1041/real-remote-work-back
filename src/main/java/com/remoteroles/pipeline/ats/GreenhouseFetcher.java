@@ -69,7 +69,7 @@ public class GreenhouseFetcher implements AtsFetcher {
                 postedAt = Json.instant(job, "updated_at");
             }
 
-            out.add(new FetchedPosting(
+            out.add(FetchedPosting.ats(
                     externalId,
                     title,
                     applyUrl,

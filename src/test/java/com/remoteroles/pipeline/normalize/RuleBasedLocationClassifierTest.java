@@ -13,6 +13,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -31,7 +32,7 @@ class RuleBasedLocationClassifierTest {
     }
 
     private Classification classify(String location, String title, Boolean remoteHint) {
-        return classifier.classify(new FetchedPosting(
+        return classifier.classify(FetchedPosting.ats(
                 "1", title, "https://example.com/apply", location,
                 null, null, remoteHint, null, null, "{}"));
     }
@@ -153,6 +154,27 @@ class RuleBasedLocationClassifierTest {
             assertEquals(GeoScope.UNKNOWN, c.geoScope(),
                     "promoting bare 'Remote' to WORLDWIDE is what makes these sites untrustworthy");
             assertTrue(c.confidence() < 0.6, "and it should not be confident about it");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"Anywhere", "Anywhere (UTC-5 to UTC+1)"})
+        @DisplayName("the aggregator's 'no stated restriction' location reaches WORLDWIDE")
+        void feedLocationsClassifyAsWorldwide(String location) {
+            // Himalayas states the absence of a restriction structurally; the fetcher
+            // renders that as "Anywhere" so it reaches WORLDWIDE through the same path
+            // as every other posting rather than bypassing the classifier.
+            Classification c = classify(location, "Engineer", Boolean.TRUE);
+            assertEquals(GeoScope.WORLDWIDE, c.geoScope(), location);
+            assertTrue(c.isRemote());
+        }
+
+        @Test
+        @DisplayName("a timezone band narrows an otherwise unrestricted role")
+        void feedTimezoneBandIsCaptured() {
+            Classification c = classify("Anywhere (UTC-5 to UTC+1)", "Engineer", Boolean.TRUE);
+            assertNotNull(c.timezoneRequirement(),
+                    "a stated overlap window is a geographic gate by another name");
+            assertTrue(c.confidence() < classify("Anywhere", "Engineer", Boolean.TRUE).confidence());
         }
 
         @Test

@@ -59,6 +59,7 @@ public class IngestionService {
     private final Normalizer normalizer;
     private final TransactionTemplate tx;
     private final IngestProperties props;
+    private final FeedIngestionService feeds;
 
     public IngestionService(CompanyRepository companies,
                             RawPostingRepository rawPostings,
@@ -67,7 +68,8 @@ public class IngestionService {
                             FetcherRegistry fetchers,
                             Normalizer normalizer,
                             TransactionTemplate tx,
-                            IngestProperties props) {
+                            IngestProperties props,
+                            FeedIngestionService feeds) {
         this.companies = companies;
         this.rawPostings = rawPostings;
         this.jobs = jobs;
@@ -76,6 +78,7 @@ public class IngestionService {
         this.normalizer = normalizer;
         this.tx = tx;
         this.props = props;
+        this.feeds = feeds;
     }
 
     /** Result counters for one full pass over every active board. */
@@ -138,8 +141,16 @@ public class IngestionService {
             }
         } // close() awaits every task
 
+        // Aggregator feeds run after the ATS boards. They are the only source of
+        // genuinely worldwide roles, which is what this site is for -- the ATS pass
+        // supplies the country-gated majority and the company pages.
+        FeedIngestionService.FeedSummary feedSummary = feeds.runOnce();
+        created.addAndGet(feedSummary.created());
+        updated.addAndGet(feedSummary.updated());
+        closed.addAndGet(feedSummary.expired());
+
         Duration elapsed = Duration.between(startedAt, Instant.now());
-        String notes = "elapsed=" + elapsed.toSeconds() + "s";
+        String notes = "elapsed=" + elapsed.toSeconds() + "s, feedFailures=" + feedSummary.failed();
         runs.finish(runId, active.size(), ok.get(), failed.get(),
                 created.get(), updated.get(), closed.get(), notes);
 

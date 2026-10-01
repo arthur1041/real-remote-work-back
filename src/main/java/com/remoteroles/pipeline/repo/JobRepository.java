@@ -41,14 +41,14 @@ public class JobRepository {
                             title, description_html, apply_url, location_raw,
                             is_remote, geo_scope, geo_detail, timezone_requirement,
                             classification_confidence, classified_by,
-                            employment_type, department, category, posted_at, dedupe_key,
+                            employment_type, department, category, posted_at, expires_at, dedupe_key,
                             first_seen_at, last_seen_at
                         ) values (
                             :companyId, :atsType, :externalId, :contentHash,
                             :title, :descriptionHtml, :applyUrl, :locationRaw,
                             :isRemote, :geoScope, :geoDetail, :timezoneRequirement,
                             :confidence, :classifiedBy,
-                            :employmentType, :department, :category, :postedAt, :dedupeKey,
+                            :employmentType, :department, :category, :postedAt, :expiresAt, :dedupeKey,
                             now(), now()
                         )
                         on conflict (company_id, external_id) do update set
@@ -67,6 +67,7 @@ public class JobRepository {
                             department                = excluded.department,
                             category                  = excluded.category,
                             posted_at                 = excluded.posted_at,
+                            expires_at                = excluded.expires_at,
                             dedupe_key                = excluded.dedupe_key,
                             last_seen_at              = now(),
                             closed_at                 = null
@@ -91,6 +92,7 @@ public class JobRepository {
                 .param("department", job.department())
                 .param("category", job.category() == null ? null : job.category().name())
                 .param("postedAt", job.postedAt() == null ? null : Timestamp.from(job.postedAt()))
+                .param("expiresAt", job.expiresAt() == null ? null : Timestamp.from(job.expiresAt()))
                 .param("dedupeKey", job.dedupeKey())
                 .query(Boolean.class)
                 .single();
@@ -118,6 +120,24 @@ public class JobRepository {
                         """)
                 .param("companyId", companyId)
                 .param("runStartedAt", Timestamp.from(runStartedAt))
+                .update();
+    }
+
+    /**
+     * Closes postings whose publisher-stated expiry has passed.
+     *
+     * <p>This is how feed postings retire. They cannot use the absence rule the ATS
+     * boards use: a paginated crawl sees only part of the feed, so absence from a run
+     * carries no information at all, and sweeping on it would close almost everything
+     * every night.
+     */
+    public int closeExpired() {
+        return db.sql("""
+                        update jobs set closed_at = now()
+                         where closed_at is null
+                           and expires_at is not null
+                           and expires_at < now()
+                        """)
                 .update();
     }
 

@@ -27,5 +27,25 @@ public record FetchedPosting(
         Boolean remoteHint,
         String department,
         String employmentType,
-        String rawPayload
-) {}
+        String rawPayload,
+
+        /**
+         * Employer name, when the posting came from a feed rather than from a
+         * company's own board. Null for ATS postings, where the company is already
+         * known from the row being polled.
+         */
+        String employerName,
+
+        /** Publisher-stated expiry, for sources that provide one. */
+        Instant expiresAt
+) {
+    /** ATS postings: the company is the board being polled. */
+    public static FetchedPosting ats(String externalId, String title, String applyUrl,
+                                     String locationRaw, String descriptionHtml,
+                                     Instant postedAt, Boolean remoteHint,
+                                     String department, String employmentType,
+                                     String rawPayload) {
+        return new FetchedPosting(externalId, title, applyUrl, locationRaw, descriptionHtml,
+                postedAt, remoteHint, department, employmentType, rawPayload, null, null);
+    }
+}

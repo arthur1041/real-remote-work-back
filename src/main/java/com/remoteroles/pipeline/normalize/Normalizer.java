@@ -39,6 +39,7 @@ public class Normalizer {
                 posting.employmentType(),
                 posting.department(),
                 posting.postedAt(),
+                posting.expiresAt(),
                 dedupeKey,
                 categorizer.categorize(posting.title(), posting.department())
         );

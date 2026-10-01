@@ -52,6 +52,13 @@ public class AtsHttp {
             // retrying will not help, so say so plainly.
             throw new BoardGoneException("board not found (404): " + url);
         }
+        if (status == 429 || status == 503) {
+            // Distinct from a generic failure: the caller must stop, not retry. A
+            // 429 here arrives as a Cloudflare challenge page, and answering a bot
+            // challenge is not something we do -- the only correct response is to
+            // back off and come back later.
+            throw new RateLimitedException("rate limited (HTTP " + status + ") by " + url);
+        }
         if (status != 200) {
             throw new IllegalStateException("HTTP " + status + " from " + url);
         }
@@ -60,6 +67,13 @@ public class AtsHttp {
 
     public ObjectMapper mapper() {
         return mapper;
+    }
+
+    /** Thrown when the host is asking us to slow down or stop. */
+    public static class RateLimitedException extends RuntimeException {
+        public RateLimitedException(String message) {
+            super(message);
+        }
     }
 
     /** Thrown when a board endpoint is permanently gone rather than briefly failing. */

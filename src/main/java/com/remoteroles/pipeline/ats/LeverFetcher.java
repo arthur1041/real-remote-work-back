@@ -54,7 +54,7 @@ public class LeverFetcher implements AtsFetcher {
                 continue;
             }
 
-            out.add(new FetchedPosting(
+            out.add(FetchedPosting.ats(
                     externalId,
                     title,
                     applyUrl,

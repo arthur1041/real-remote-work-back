@@ -21,9 +21,9 @@ public class CompanyRepository {
     public List<Company> findActive() {
         return db.sql("""
                         select id, name, domain, ats_type, ats_token, status,
-                               consecutive_failures, last_fetched_at, last_success_at
+                               consecutive_failures, last_fetched_at, last_success_at, source_kind
                         from companies
-                        where status = 'ACTIVE'
+                        where status = 'ACTIVE' and source_kind = 'ATS'
                         order by last_fetched_at nulls first, id
                         """)
                 .query(CompanyRepository::mapCompany)
@@ -81,6 +81,35 @@ public class CompanyRepository {
                 .update();
     }
 
+    /**
+     * Finds or creates the employer behind a feed posting.
+     *
+     * <p>Feed employers arrive one posting at a time with nothing but a name, so the
+     * row is created on sight. Identity is the generated slug, which means an
+     * employer appearing under slightly different capitalisation collapses onto one
+     * company page instead of fragmenting into several thin ones.
+     *
+     * <p>Returns the company id. Concurrent runs race here, so the insert is written
+     * to tolerate losing: {@code on conflict do nothing} followed by a read.
+     */
+    public long resolveFeedEmployer(String name, AtsType source) {
+        db.sql("""
+                        insert into companies (name, ats_type, ats_token, source_kind)
+                        values (:name, :atsType, :token, 'FEED')
+                        on conflict (ats_type, ats_token) do nothing
+                        """)
+                .param("name", name)
+                .param("atsType", source.name())
+                .param("token", name)
+                .update();
+
+        return db.sql("select id from companies where ats_type = :atsType and ats_token = :token")
+                .param("atsType", source.name())
+                .param("token", name)
+                .query(Long.class)
+                .single();
+    }
+
     private static Company mapCompany(ResultSet rs, int rowNum) throws SQLException {
         return new Company(
                 rs.getLong("id"),
@@ -91,7 +120,8 @@ public class CompanyRepository {
                 rs.getString("status"),
                 rs.getInt("consecutive_failures"),
                 rs.getTimestamp("last_fetched_at") == null ? null : rs.getTimestamp("last_fetched_at").toInstant(),
-                rs.getTimestamp("last_success_at") == null ? null : rs.getTimestamp("last_success_at").toInstant()
+                rs.getTimestamp("last_success_at") == null ? null : rs.getTimestamp("last_success_at").toInstant(),
+                rs.getString("source_kind")
         );
     }
 
