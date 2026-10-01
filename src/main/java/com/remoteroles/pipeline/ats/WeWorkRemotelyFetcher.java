@@ -212,7 +212,8 @@ public class WeWorkRemotelyFetcher implements FeedFetcher {
                 text(item, "type"),
                 serialize(item),
                 employer,
-                rfc1123(text(item, "expires_at"))
+                rfc1123(text(item, "expires_at")),
+                null, null, null, null, null
         );
     }
 

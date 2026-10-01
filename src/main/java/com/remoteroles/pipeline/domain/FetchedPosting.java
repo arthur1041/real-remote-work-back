@@ -37,7 +37,18 @@ public record FetchedPosting(
         String employerName,
 
         /** Publisher-stated expiry, for sources that provide one. */
-        Instant expiresAt
+        Instant expiresAt,
+
+        /**
+         * Structured salary, when the source states it rather than burying it in
+         * prose. Only Himalayas does, and only on a minority of postings -- the
+         * rest stay null rather than being guessed at from the description.
+         */
+        java.math.BigDecimal salaryMin,
+        java.math.BigDecimal salaryMax,
+        String salaryCurrency,
+        String salaryPeriod,
+        String seniority
 ) {
     /** ATS postings: the company is the board being polled. */
     public static FetchedPosting ats(String externalId, String title, String applyUrl,
@@ -46,6 +57,7 @@ public record FetchedPosting(
                                      String department, String employmentType,
                                      String rawPayload) {
         return new FetchedPosting(externalId, title, applyUrl, locationRaw, descriptionHtml,
-                postedAt, remoteHint, department, employmentType, rawPayload, null, null);
+                postedAt, remoteHint, department, employmentType, rawPayload, null, null,
+                null, null, null, null, null);
     }
 }

@@ -42,6 +42,8 @@ public class JobRepository {
                             is_remote, geo_scope, geo_detail, timezone_requirement,
                             classification_confidence, classified_by,
                             employment_type, department, category, posted_at, expires_at, dedupe_key,
+                            benefits, employment_kind, seniority,
+                            salary_min, salary_max, salary_currency, salary_period,
                             first_seen_at, last_seen_at
                         ) values (
                             :companyId, :atsType, :externalId, :contentHash,
@@ -49,6 +51,8 @@ public class JobRepository {
                             :isRemote, :geoScope, :geoDetail, :timezoneRequirement,
                             :confidence, :classifiedBy,
                             :employmentType, :department, :category, :postedAt, :expiresAt, :dedupeKey,
+                            cast(:benefits as text[]), :employmentKind, :seniority,
+                            :salaryMin, :salaryMax, :salaryCurrency, :salaryPeriod,
                             now(), now()
                         )
                         on conflict (company_id, external_id) do update set
@@ -66,6 +70,13 @@ public class JobRepository {
                             employment_type           = excluded.employment_type,
                             department                = excluded.department,
                             category                  = excluded.category,
+                            benefits                  = excluded.benefits,
+                            employment_kind           = excluded.employment_kind,
+                            seniority                 = excluded.seniority,
+                            salary_min                = excluded.salary_min,
+                            salary_max                = excluded.salary_max,
+                            salary_currency           = excluded.salary_currency,
+                            salary_period             = excluded.salary_period,
                             posted_at                 = excluded.posted_at,
                             expires_at                = excluded.expires_at,
                             dedupe_key                = excluded.dedupe_key,
@@ -91,6 +102,18 @@ public class JobRepository {
                 .param("employmentType", job.employmentType())
                 .param("department", job.department())
                 .param("category", job.category() == null ? null : job.category().name())
+                // Postgres array literal: {A,B,C}. The values are enum names, so
+                // there is nothing in them that needs quoting or escaping.
+                .param("benefits", job.benefits() == null || job.benefits().isEmpty()
+                        ? "{}"
+                        : job.benefits().stream().map(Enum::name)
+                                .collect(java.util.stream.Collectors.joining(",", "{", "}")))
+                .param("employmentKind", job.employmentKind() == null ? null : job.employmentKind().name())
+                .param("seniority", job.seniority())
+                .param("salaryMin", job.salaryMin())
+                .param("salaryMax", job.salaryMax())
+                .param("salaryCurrency", job.salaryCurrency())
+                .param("salaryPeriod", job.salaryPeriod())
                 .param("postedAt", job.postedAt() == null ? null : Timestamp.from(job.postedAt()))
                 .param("expiresAt", job.expiresAt() == null ? null : Timestamp.from(job.expiresAt()))
                 .param("dedupeKey", job.dedupeKey())

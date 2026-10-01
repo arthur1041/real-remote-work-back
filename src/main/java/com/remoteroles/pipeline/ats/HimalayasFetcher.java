@@ -176,7 +176,12 @@ public class HimalayasFetcher implements FeedFetcher {
                 Json.text(job, "employmentType"),
                 job.toString(),
                 employer,
-                epochSeconds(job, "expiryDate")
+                epochSeconds(job, "expiryDate"),
+                decimal(job, "minSalary"),
+                decimal(job, "maxSalary"),
+                Json.text(job, "currency"),
+                Json.text(job, "salaryPeriod"),
+                firstOf(job, "seniority")
         );
     }
 
@@ -211,6 +216,32 @@ public class HimalayasFetcher implements FeedFetcher {
             return categories.get(0).asText(null);
         }
         return null;
+    }
+
+    /** Salary fields arrive as numbers or as strings, and often as empty strings. */
+    private static java.math.BigDecimal decimal(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        String text = value.asText("").trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return new java.math.BigDecimal(text);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** Seniority arrives as an array, e.g. ["Mid-level"]. */
+    private static String firstOf(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value != null && value.isArray() && !value.isEmpty()) {
+            return value.get(0).asText(null);
+        }
+        return Json.text(node, field);
     }
 
     private static Instant epochSeconds(JsonNode node, String field) {

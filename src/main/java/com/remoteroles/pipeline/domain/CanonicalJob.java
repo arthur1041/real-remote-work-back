@@ -18,5 +18,12 @@ public record CanonicalJob(
         Instant postedAt,
         Instant expiresAt,
         String dedupeKey,
-        RoleCategory category
+        RoleCategory category,
+        java.util.Set<Benefit> benefits,
+        EmploymentKind employmentKind,
+        java.math.BigDecimal salaryMin,
+        java.math.BigDecimal salaryMax,
+        String salaryCurrency,
+        String salaryPeriod,
+        String seniority
 ) {}
