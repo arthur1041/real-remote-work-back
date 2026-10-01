@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: remote-roles-pipeline
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:55432/remoteroles}
+    username: ${DB_USER:remoteroles}
+    password: ${DB_PASSWORD:localdev}
+    hikari:
+      # Ingestion runs wide but writes in short bursts; the pool only needs to
+      # cover concurrent flushes, not the full fetch fan-out.
+      maximum-pool-size: 12
+      pool-name: remote-roles-pool
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: ${PORT:8080}
+
+ingest:
+  # How many boards to fetch at once. Virtual threads make this cheap, but the
+  # number is still a politeness budget against other people's servers.
+  concurrency: ${INGEST_CONCURRENCY:48}
+  user-agent: ${INGEST_USER_AGENT:remote-roles/0.1 (+https://example.com/bot; jobs aggregator)}
+  request-timeout: 30s
+  # Boards that fail this many times in a row get retired to DEAD.
+  max-consecutive-failures: 8
+  schedule:
+    enabled: ${INGEST_SCHEDULE_ENABLED:true}
+    # Every day at 04:17 UTC. Off-the-hour on purpose: everybody's cron fires at
+    # :00 and these are other people's servers.
+    cron: ${INGEST_CRON:0 17 4 * * *}
+
+logging:
+  level:
+    com.remoteroles: INFO

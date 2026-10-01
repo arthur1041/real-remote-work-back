@@ -1,0 +1,12 @@
+# One-shot ingest profile: run the daily pass and exit.
+#
+# A cron job has no reason to start a servlet container -- it wastes startup time
+# and, more practically, fails outright when something else already holds the port.
+spring:
+  main:
+    web-application-type: none
+
+ingest:
+  once: true
+  schedule:
+    enabled: false
