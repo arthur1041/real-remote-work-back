@@ -11,9 +11,11 @@ import org.springframework.stereotype.Component;
 public class Normalizer {
 
     private final LocationClassifier classifier;
+    private final RoleCategorizer categorizer;
 
-    public Normalizer(LocationClassifier classifier) {
+    public Normalizer(LocationClassifier classifier, RoleCategorizer categorizer) {
         this.classifier = classifier;
+        this.categorizer = categorizer;
     }
 
     public CanonicalJob normalize(Company company, FetchedPosting posting) {
@@ -37,7 +39,8 @@ public class Normalizer {
                 posting.employmentType(),
                 posting.department(),
                 posting.postedAt(),
-                dedupeKey
+                dedupeKey,
+                categorizer.categorize(posting.title(), posting.department())
         );
     }
 }

@@ -16,5 +16,6 @@ public record CanonicalJob(
         String employmentType,
         String department,
         Instant postedAt,
-        String dedupeKey
+        String dedupeKey,
+        RoleCategory category
 ) {}

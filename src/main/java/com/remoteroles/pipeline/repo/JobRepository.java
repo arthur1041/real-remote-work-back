@@ -41,14 +41,14 @@ public class JobRepository {
                             title, description_html, apply_url, location_raw,
                             is_remote, geo_scope, geo_detail, timezone_requirement,
                             classification_confidence, classified_by,
-                            employment_type, department, posted_at, dedupe_key,
+                            employment_type, department, category, posted_at, dedupe_key,
                             first_seen_at, last_seen_at
                         ) values (
                             :companyId, :atsType, :externalId, :contentHash,
                             :title, :descriptionHtml, :applyUrl, :locationRaw,
                             :isRemote, :geoScope, :geoDetail, :timezoneRequirement,
                             :confidence, :classifiedBy,
-                            :employmentType, :department, :postedAt, :dedupeKey,
+                            :employmentType, :department, :category, :postedAt, :dedupeKey,
                             now(), now()
                         )
                         on conflict (company_id, external_id) do update set
@@ -65,6 +65,7 @@ public class JobRepository {
                             classified_by             = excluded.classified_by,
                             employment_type           = excluded.employment_type,
                             department                = excluded.department,
+                            category                  = excluded.category,
                             posted_at                 = excluded.posted_at,
                             dedupe_key                = excluded.dedupe_key,
                             last_seen_at              = now(),
@@ -88,6 +89,7 @@ public class JobRepository {
                 .param("classifiedBy", job.classification().classifiedBy())
                 .param("employmentType", job.employmentType())
                 .param("department", job.department())
+                .param("category", job.category() == null ? null : job.category().name())
                 .param("postedAt", job.postedAt() == null ? null : Timestamp.from(job.postedAt()))
                 .param("dedupeKey", job.dedupeKey())
                 .query(Boolean.class)
