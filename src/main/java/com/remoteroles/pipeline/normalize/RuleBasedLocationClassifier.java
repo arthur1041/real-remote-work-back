@@ -29,6 +29,34 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
 
     static final String VERSION = "RULES_V1";
 
+    /**
+     * "anywhere" immediately qualified by a place, as in "Anywhere in France".
+     *
+     * <p>This is a restriction written to look like freedom, and it was reading as
+     * the opposite: the worldwide test fired on the bare word "anywhere" before
+     * anything looked at the country beside it, so 41 postings carried a WORLDWIDE
+     * badge above the words "Anywhere in Belgium".
+     *
+     * <p>"anywhere in the world" is the one phrase of this shape that genuinely
+     * means unrestricted, so it is excluded.
+     */
+    private static final Pattern ANYWHERE_IN_PLACE =
+            Pattern.compile("\\banywhere\\s+in\\s+(?!the world\\b)");
+
+    /**
+     * Phrasing that is unambiguous on its own.
+     *
+     * <p>These beat a co-named country. WeWorkRemotely postings arrive as
+     * "Anywhere in the World, United States of America" -- its region field is the
+     * eligibility and the country beside it is supplementary, so treating that
+     * country as a gate demotes a genuinely unrestricted role.
+     *
+     * <p>Bare "anywhere" is deliberately not in here. It is the word that appears
+     * in "Anywhere in France".
+     */
+    private static final Pattern WORLDWIDE_EXPLICIT = Pattern.compile(
+            "\\banywhere in the world\\b|\\bworldwide\\b|\\bworld-wide\\b|\\bglobally\\b");
+
     /** Earns WORLDWIDE outright. */
     private static final Pattern WORLDWIDE = Pattern.compile(
             "\\b(work from anywhere|from anywhere|anywhere in the world|anywhere|worldwide|world-wide|"
@@ -94,17 +122,34 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
 
         String timezone = findTimezone(location);
 
-        // 3. Explicit worldwide language. The only route to WORLDWIDE.
-        if (saysWorldwide) {
+        // 3. Resolve places first. This has to happen before the worldwide test,
+        //    because the words that promise the world and the words that take it
+        //    away appear in the same string.
+        Set<String> regions = findRegions(location);
+        Set<String> countries = findCountries(location);
+
+        // 4. WORLDWIDE, and only on terms.
+        //
+        //    A named country disqualifies it outright: "Anywhere in France" and
+        //    "Ontario, Canada - Remote, Anywhere" are eligibility gates whatever
+        //    the adjective. So is any "anywhere in <place>" phrasing.
+        //
+        //    Named regions do not disqualify, because a posting like "Home based -
+        //    Americas; APAC; EMEA; Worldwide" lists worldwide as one of its own
+        //    options. Erring the other way would cost real worldwide roles, and
+        //    erring this way costs none -- the posting still lists its regions.
+        //    Unambiguous phrasing is exempt: "anywhere in the world" states the
+        //    eligibility outright, and a country listed beside it is supplementary.
+        boolean explicit = WORLDWIDE_EXPLICIT.matcher(location).find();
+        boolean qualifiedByPlace =
+                !explicit && (ANYWHERE_IN_PLACE.matcher(location).find() || !countries.isEmpty());
+
+        if (saysWorldwide && !qualifiedByPlace) {
             // A stated timezone band contradicts "anywhere", so drop confidence
             // rather than silently honouring a promise the posting does not make.
             double confidence = timezone == null ? 0.95 : 0.65;
             return new Classification(true, GeoScope.WORLDWIDE, null, timezone, confidence, VERSION);
         }
-
-        // 4. Regions beat countries: "Remote, North America" names no country.
-        Set<String> regions = findRegions(location);
-        Set<String> countries = findCountries(location);
 
         if (!regions.isEmpty()) {
             String detail = String.join(", ", regions);

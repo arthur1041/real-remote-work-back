@@ -146,6 +146,73 @@ class RuleBasedLocationClassifierTest {
             assertTrue(c.confidence() >= 0.9, location);
         }
 
+        @ParameterizedTest
+        @CsvSource({
+                "'Anywhere in France',                       FR",
+                "'Anywhere in Belgium',                      BE",
+                "'Anywhere in Québec',                       CA",
+                "'Ontario, Canada - Remote, Anywhere',       CA",
+                "'Remote - Anywhere (U.S.)',                 US",
+        })
+        @DisplayName("'anywhere' qualified by a place is a restriction, not freedom")
+        void anywhereInAPlaceIsNotWorldwide(String location, String expectedCountry) {
+            // These shipped with a WORLDWIDE badge above the words "Anywhere in
+            // Belgium", because the worldwide test fired on the bare word
+            // "anywhere" before anything looked at the country beside it.
+            Classification c = classify(location);
+            assertEquals(GeoScope.COUNTRY, c.geoScope(), location);
+            assertEquals(expectedCountry, c.geoDetail(), location);
+        }
+
+        @Test
+        @DisplayName("'anywhere in' several countries is a region, not worldwide")
+        void anywhereInSeveralCountriesIsRegional() {
+            Classification c = classify("Anywhere in France, Belgium, Spain");
+            assertEquals(GeoScope.REGION, c.geoScope());
+            assertAll(
+                    () -> assertTrue(c.geoDetail().contains("FR")),
+                    () -> assertTrue(c.geoDetail().contains("BE")),
+                    () -> assertTrue(c.geoDetail().contains("ES")));
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+                "Home based - Worldwide",
+                "Anywhere - Remote",
+                "Remote - Global Anywhere",
+                "Anywhere in the World",
+                "Home Based - Americas; Home based - EMEA; Home based - Worldwide",
+        })
+        @DisplayName("genuinely unrestricted postings still reach WORLDWIDE")
+        void realWorldwideSurvivesTheGate(String location) {
+            // The fix must not cost real worldwide roles. The last case names
+            // regions AND worldwide: the posting offers worldwide as one of its
+            // own options, so regions alone do not disqualify it.
+            assertEquals(GeoScope.WORLDWIDE, classify(location).geoScope(), location);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+                "Anywhere in the World, United States of America",
+                "Anywhere in the World, Canada",
+                "Anywhere in the World, Barbados and United States of America",
+        })
+        @DisplayName("'anywhere in the world' beats a country listed beside it")
+        void explicitWorldwideBeatsCoNamedCountry(String location) {
+            // WeWorkRemotely sends its region and country fields joined. The region
+            // is the eligibility; the country beside it is supplementary. Treating
+            // that country as a gate demoted 40 genuinely unrestricted roles.
+            assertEquals(GeoScope.WORLDWIDE, classify(location).geoScope(), location);
+        }
+
+        @Test
+        @DisplayName("a country named anywhere in the string beats a worldwide word")
+        void namedCountryBeatsWorldwideWording() {
+            Classification c = classify("Any Location, Serbia, Poland, Turkey, Vietnam");
+            assertEquals(GeoScope.REGION, c.geoScope(),
+                    "a concrete country list is an eligibility gate whatever adjective sits beside it");
+        }
+
         @Test
         @DisplayName("bare 'Remote' is UNKNOWN, never WORLDWIDE")
         void bareRemoteIsNotWorldwide() {
