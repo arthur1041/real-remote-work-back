@@ -54,7 +54,7 @@ newsletter:
   delivery:
     enabled: ${NEWSLETTER_DELIVERY_ENABLED:false}
   from-address: ${NEWSLETTER_FROM_ADDRESS:hello@example.com}
-  from-name: ${NEWSLETTER_FROM_NAME:True Remote Jobs}
+  from-name: ${NEWSLETTER_FROM_NAME:Actually Remote}
   site-url: ${SITE_URL:http://localhost:3000}
 
 # SMTP, for when delivery is switched on. Left unset on purpose: Spring's mail
