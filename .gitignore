@@ -1,0 +1,17 @@
+# Maven
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/
+
+# Editors / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.log
+
+# Env & secrets
+.env
+.env*.local
