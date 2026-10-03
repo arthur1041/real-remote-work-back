@@ -63,7 +63,12 @@ final class Geography {
         // "NAMER" is Zapier's and others' house style for North America; it appears
         // as the entire location string, so without it those roles look unscoped.
         REGIONS.put("NORTH_AMERICA", Set.of("north america", "northamerica", "namer"));
-        REGIONS.put("AMERICAS", Set.of("americas"));
+        // "AMER" is the counterpart to NAMER in several boards' house style --
+        // Supabase ships "Remote, AMER" beside "Remote, Global" -- and without it
+        // those roles landed in UNKNOWN, one description-scan away from being read
+        // as worldwide. containsWord is boundary-aware, so this cannot match inside
+        // "America" or "Americas".
+        REGIONS.put("AMERICAS", Set.of("americas", "amer"));
         REGIONS.put("MENA", Set.of("mena", "middle east"));
         REGIONS.put("AFRICA", Set.of("africa"));
         REGIONS.put("NORDICS", Set.of("nordics", "nordic", "scandinavia"));

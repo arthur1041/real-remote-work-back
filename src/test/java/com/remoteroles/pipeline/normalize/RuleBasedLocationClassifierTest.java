@@ -131,6 +131,34 @@ class RuleBasedLocationClassifierTest {
             Classification c = classify("Remote, KSA; Remote, UAE");
             assertEquals(GeoScope.REGION, c.geoScope());
         }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"Remote, AMER", "AMER - Remote"})
+        @DisplayName("AMER is a region, not an unscoped role")
+        void amerIsARegion(String location) {
+            Classification c = classify(location);
+            assertEquals(GeoScope.REGION, c.geoScope(),
+                    location + " is the house style several boards pair with "
+                            + "\"Remote, Global\"; left unmapped it fell through to UNKNOWN");
+            assertTrue(c.geoDetail().contains("AMERICAS"), location + " -> " + c.geoDetail());
+        }
+
+        @Test
+        @DisplayName("AMER alone, the way a board ships it as the whole location")
+        void bareAmerIsARegion() {
+            // Same shape as the NAMER case: the location carries no "remote" word, so
+            // the ATS flag is what makes it a remote role at all.
+            Classification c = classify("AMER", "Engineer", Boolean.TRUE);
+            assertEquals(GeoScope.REGION, c.geoScope());
+            assertTrue(c.geoDetail().contains("AMERICAS"), c.geoDetail());
+        }
+
+        @Test
+        @DisplayName("'amer' does not match inside 'North America'")
+        void amerDoesNotMatchInsideLongerWords() {
+            Classification c = classify("Remote - North America");
+            assertTrue(c.geoDetail().contains("NORTH_AMERICA"), c.geoDetail());
+        }
     }
 
     @Nested
@@ -211,6 +239,28 @@ class RuleBasedLocationClassifierTest {
             Classification c = classify("Any Location, Serbia, Poland, Turkey, Vietnam");
             assertEquals(GeoScope.REGION, c.geoScope(),
                     "a concrete country list is an eligibility gate whatever adjective sits beside it");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"Global", "Remote, Global", "Global - Remote", "Remote - Global"})
+        @DisplayName("a bare 'Global' location earns worldwide")
+        void bareGlobalIsWorldwide(String location) {
+            Classification c = classify(location);
+            assertEquals(GeoScope.WORLDWIDE, c.geoScope(),
+                    location + " is written as the whole location by real boards; "
+                            + "thirty live postings sat in UNKNOWN for want of it");
+        }
+
+        @Test
+        @DisplayName("'Global' still loses to a named country")
+        void globalDoesNotBeatANamedCountry() {
+            // "global" is deliberately absent from WORLDWIDE_EXPLICIT, so unlike
+            // "anywhere in the world" it does not override a co-named place.
+            Classification c = classify("Global - London, United Kingdom");
+            assertEquals(GeoScope.COUNTRY, c.geoScope(),
+                    "a company-wide 'Global' banner above a London job is not an "
+                            + "eligibility statement");
+            assertEquals("GB", c.geoDetail());
         }
 
         @Test

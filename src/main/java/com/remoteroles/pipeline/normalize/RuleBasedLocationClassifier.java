@@ -57,10 +57,18 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
     private static final Pattern WORLDWIDE_EXPLICIT = Pattern.compile(
             "\\banywhere in the world\\b|\\bworldwide\\b|\\bworld-wide\\b|\\bglobally\\b");
 
-    /** Earns WORLDWIDE outright. */
+    /**
+     * Earns WORLDWIDE outright.
+     *
+     * <p>Bare "global" is in here and deliberately NOT in {@link #WORLDWIDE_EXPLICIT}.
+     * Boards write it as the whole location -- "Global", "Remote, Global",
+     * "Global - Remote" -- and thirty live postings sat in UNKNOWN for want of it.
+     * Keeping it out of the explicit set means it still loses to a named country, so
+     * "Global - London" stays a London job while "Remote, Global" becomes worldwide.
+     */
     private static final Pattern WORLDWIDE = Pattern.compile(
             "\\b(work from anywhere|from anywhere|anywhere in the world|anywhere|worldwide|world-wide|"
-                    + "globally|global remote|fully remote, global|any location|"
+                    + "globally|global remote|global|fully remote, global|any location|"
                     + "location independent|location-independent|no location requirement)\\b");
 
     /** Indicates remote work without saying how open it is. */
