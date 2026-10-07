@@ -251,6 +251,45 @@ class RuleBasedLocationClassifierTest {
                             + "thirty live postings sat in UNKNOWN for want of it");
         }
 
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "Anywhere in the World, France, Portugal, Spain, and Netherlands",
+            "Anywhere in the World, Austria, Belgium, Bulgaria, Denmark, and Sweden",
+            "Anywhere in the World, Argentina, Brazil, Poland, Portugal, and Romania"
+        })
+        @DisplayName("an enumerated country list is a gate, whatever banner sits above it")
+        void worldwideBannerDoesNotBeatACountryList(String location) {
+            Classification c = classify(location);
+            assertEquals(GeoScope.REGION, c.geoScope(),
+                    "every posting of this shape checked on the live board was gated "
+                            + "-- one to Europe, one to Latin America -- so the list is "
+                            + "the eligibility and the banner is a category label: "
+                            + location);
+        }
+
+        @Test
+        @DisplayName("the exemption survives a country the gazetteer cannot resolve")
+        void unresolvedCountriesStillCountAsAList() {
+            // This one slipped through the first fix: of "Cuba, United States of
+            // America, and Russian Federation" only the US resolved, so the posting
+            // looked like a single co-named country and kept its worldwide badge.
+            // The rule was right; the gazetteer was short.
+            Classification c = classify(
+                    "Anywhere in the World, Cuba, United States of America, and Russian Federation");
+            assertEquals(GeoScope.REGION, c.geoScope(),
+                    "three enumerated countries is a list, and all three must resolve "
+                            + "for the list to be seen as one");
+        }
+
+        @Test
+        @DisplayName("but it still beats ONE co-named country, which is the aggregator's habit")
+        void worldwideBannerStillBeatsASingleCountry() {
+            // 58 live postings have exactly this shape and are genuinely unrestricted;
+            // the country is incidental to the feed's own region label.
+            Classification c = classify("Anywhere in the World, United States of America");
+            assertEquals(GeoScope.WORLDWIDE, c.geoScope());
+        }
+
         @Test
         @DisplayName("'Global' still loses to a named country")
         void globalDoesNotBeatANamedCountry() {

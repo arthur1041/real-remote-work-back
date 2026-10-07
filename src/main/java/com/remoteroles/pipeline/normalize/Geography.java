@@ -79,7 +79,8 @@ final class Geography {
         // United States: by far the most-aliased value in the wild.
         country("US", "united states of america", "united states", "u.s.a.", "u.s.", "usa", "us");
         country("CA", "canada");
-        country("GB", "united kingdom", "great britain", "england", "scotland", "wales", "u.k.", "uk");
+        country("GB", "united kingdom of great britain and northern ireland", "united kingdom",
+                "great britain", "england", "scotland", "wales", "u.k.", "uk");
         country("IE", "ireland");
         country("DE", "germany", "deutschland");
         country("FR", "france");
@@ -112,7 +113,7 @@ final class Geography {
         country("IN", "india");
         country("SG", "singapore");
         country("JP", "japan");
-        country("KR", "south korea", "korea");
+        country("KR", "korea (republic of)", "republic of korea", "south korea", "korea");
         country("CN", "china");
         country("HK", "hong kong");
         country("TW", "taiwan");
@@ -122,7 +123,7 @@ final class Geography {
         country("ID", "indonesia");
         country("MY", "malaysia");
         country("TH", "thailand");
-        country("VN", "vietnam");
+        country("VN", "viet nam", "vietnam");
         country("BR", "brazil", "brasil");
         country("MX", "mexico", "méxico");
         country("AR", "argentina");
@@ -131,6 +132,53 @@ final class Geography {
         country("PE", "peru");
         country("UY", "uruguay");
         country("CR", "costa rica");
+
+        // Added from the country lists aggregator feeds actually publish. Each of
+        // these appeared in live postings and resolved to nothing, which meant an
+        // enumerated allowlist could read as a single country -- or as no country at
+        // all, which is how a gated role reaches a worldwide badge.
+        //
+        // The UN long forms are here because that is the register these feeds write
+        // in: "Bolivia (Plurinational State of)", not "Bolivia".
+        country("AL", "albania");
+        country("AD", "andorra");
+        country("BA", "bosnia and herzegovina", "bosnia");
+        country("BG", "bulgaria");
+        country("HR", "croatia");
+        country("CY", "cyprus");
+        country("GR", "greece");
+        country("HU", "hungary");
+        country("IS", "iceland");
+        country("LU", "luxembourg");
+        country("MT", "malta");
+        country("MD", "moldova (republic of)", "moldova");
+        country("ME", "montenegro");
+        country("MK", "north macedonia", "macedonia");
+        country("RS", "serbia");
+        country("SK", "slovakia");
+        country("SI", "slovenia");
+        country("RU", "russian federation", "russia");
+        country("MA", "morocco");
+        country("BO", "bolivia (plurinational state of)", "bolivia");
+        country("BZ", "belize");
+        country("CU", "cuba");
+        country("DO", "dominican republic");
+        country("EC", "ecuador");
+        country("SV", "el salvador");
+        country("GT", "guatemala");
+        country("HT", "haiti");
+        country("HN", "honduras");
+        country("JM", "jamaica");
+        country("PA", "panama");
+        country("PY", "paraguay");
+        country("PG", "papua new guinea");
+        // A US territory rather than a sovereign state, but it is listed separately by
+        // the feeds and is a distinct work-authorisation question, so it gets its own
+        // code rather than being folded into US.
+        country("PR", "puerto rico");
+        // Deliberately absent: "Georgia". It is a country and a US state, and the
+        // feeds give no way to tell which is meant. Mislabelling is worse than
+        // declining to label, so it stays in UNKNOWN.
 
         // Canadian provinces: "Ontario - Remote" appears often enough to matter.
         subdivision("CA", "ontario", "quebec", "québec", "british columbia", "alberta",

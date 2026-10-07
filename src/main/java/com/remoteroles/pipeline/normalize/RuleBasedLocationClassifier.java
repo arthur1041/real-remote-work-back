@@ -148,7 +148,18 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
         //    erring this way costs none -- the posting still lists its regions.
         //    Unambiguous phrasing is exempt: "anywhere in the world" states the
         //    eligibility outright, and a country listed beside it is supplementary.
-        boolean explicit = WORLDWIDE_EXPLICIT.matcher(location).find();
+        //    The exemption for explicit phrasing holds against ONE co-named country
+        //    and no further. That is the shape it was written for: WeWorkRemotely
+        //    appends a single country to its own region label, as in "Anywhere in
+        //    the World, United States of America", where the country is incidental.
+        //
+        //    A LIST is the opposite. "Anywhere in the World" followed by thirty-four
+        //    enumerated European countries is an allowlist with a banner over it, and
+        //    every such posting checked was genuinely gated -- one to Europe, one to
+        //    Latin America and the Balkans. Letting the banner win there puts a
+        //    worldwide badge on a role most readers cannot take, which is the single
+        //    failure this site cannot afford.
+        boolean explicit = WORLDWIDE_EXPLICIT.matcher(location).find() && countries.size() <= 1;
         boolean qualifiedByPlace =
                 !explicit && (ANYWHERE_IN_PLACE.matcher(location).find() || !countries.isEmpty());
 
