@@ -7,6 +7,7 @@ import com.remoteroles.pipeline.domain.CanonicalJob;
 import com.remoteroles.pipeline.domain.Company;
 import com.remoteroles.pipeline.domain.FetchResult;
 import com.remoteroles.pipeline.domain.FetchedPosting;
+import com.remoteroles.pipeline.normalize.GenericPosting;
 import com.remoteroles.pipeline.normalize.Normalizer;
 import com.remoteroles.pipeline.repo.CompanyRepository;
 import com.remoteroles.pipeline.repo.IngestRunRepository;
@@ -202,6 +203,17 @@ public class IngestionService {
             int updated = 0;
 
             for (FetchedPosting posting : postings) {
+                // Talent pools and "general application" forms are board entries
+                // with no job behind them. Skipping them here rather than filtering
+                // at read time means they also leave the sitemap and stop emitting
+                // JobPosting markup for a role that does not exist. Any already
+                // stored go quiet on their own: an ATS board is read in full, so a
+                // posting we stop submitting is a posting that has disappeared, and
+                // the normal expiry sweep closes it.
+                if (GenericPosting.isNotARole(posting.title())) {
+                    continue;
+                }
+
                 CanonicalJob job = normalizer.normalize(company, posting);
 
                 rawPostings.saveIfNew(company.id(), company.atsType(),

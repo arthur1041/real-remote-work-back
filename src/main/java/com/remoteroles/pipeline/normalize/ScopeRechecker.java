@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
+import java.util.Objects;
 import java.util.List;
 import java.util.Map;
 
@@ -61,6 +62,16 @@ public class ScopeRechecker {
                     candidate.locationRaw(), null, null, Boolean.TRUE, null, null, "{}"));
 
             if (verdict.geoScope() == GeoScope.WORLDWIDE) {
+                // Still worldwide, but the verdict can differ in its detail: the
+                // timezone reader learned to keep both ends of a band, and five
+                // roles reading "Anywhere (UTC-10 to UTC+14)" were stored as
+                // "UTC+14" -- the far edge of the planet where the posting said
+                // the whole of it. Writing only on a scope change left those
+                // uncorrected, so anything that moved gets written.
+                if (!Objects.equals(verdict.timezoneRequirement(), candidate.timezoneRequirement())) {
+                    changed += jobs.updateScope(candidate.id(), verdict);
+                    moves.merge("TIMEZONE_CORRECTED", 1, Integer::sum);
+                }
                 continue;
             }
             // A re-run that says "not remote at all" is not something to act on from

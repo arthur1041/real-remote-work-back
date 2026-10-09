@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.remoteroles.pipeline.ats.AshbyCompensation;
 import com.remoteroles.pipeline.domain.CanonicalJob;
 import com.remoteroles.pipeline.domain.Classification;
+import com.remoteroles.pipeline.normalize.GenericPosting;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -245,7 +246,8 @@ public class JobRepository {
     }
 
     /** A listing's classifier inputs, for re-running a scope decision over stored rows. */
-    public record ScopeCandidate(long id, String title, String locationRaw, String geoScope) {
+    public record ScopeCandidate(long id, String title, String locationRaw, String geoScope,
+                                 String timezoneRequirement) {
     }
 
     /**
@@ -263,14 +265,15 @@ public class JobRepository {
      */
     public List<ScopeCandidate> worldwideForRecheck() {
         return db.sql("""
-                        select id, title, location_raw, geo_scope
+                        select id, title, location_raw, geo_scope, timezone_requirement
                           from jobs
                          where closed_at is null
                            and geo_scope = 'WORLDWIDE'
                         """)
                 .query((rs, n) -> new ScopeCandidate(
                         rs.getLong("id"), rs.getString("title"),
-                        rs.getString("location_raw"), rs.getString("geo_scope")))
+                        rs.getString("location_raw"), rs.getString("geo_scope"),
+                        rs.getString("timezone_requirement")))
                 .list();
     }
 
@@ -291,5 +294,36 @@ public class JobRepository {
                 .param("by", c.classifiedBy())
                 .param("id", id)
                 .update();
+    }
+
+    /**
+     * Closes listings that were never roles.
+     *
+     * <p>Ingestion now refuses them, but ninety were already stored, and a feed
+     * posting does not disappear on its own -- it sits until its stated expiry,
+     * which for some sources is a year out. Each one is an indexable page emitting
+     * JobPosting markup for a job that does not exist, so they are retired now
+     * rather than waited out.
+     *
+     * <p>Closed rather than deleted: {@code closed_at} already means "not on the
+     * board", it takes them out of the feed, the sitemap and the company pages in
+     * one move, and nothing is destroyed if the pattern ever needs revisiting.
+     */
+    public int retireNonRoles() {
+        record Row(long id, String title) {}
+        List<Row> open = db.sql("select id, title from jobs where closed_at is null")
+                .query((rs, n) -> new Row(rs.getLong("id"), rs.getString("title")))
+                .list();
+
+        int closed = 0;
+        for (Row row : open) {
+            if (!GenericPosting.isNotARole(row.title())) {
+                continue;
+            }
+            closed += db.sql("update jobs set closed_at = now() where id = :id and closed_at is null")
+                    .param("id", row.id())
+                    .update();
+        }
+        return closed;
     }
 }

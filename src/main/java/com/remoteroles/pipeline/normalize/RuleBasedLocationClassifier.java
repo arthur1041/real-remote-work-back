@@ -86,13 +86,29 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
                     + "relocation required|must relocate|commutable|commuting distance)\\b");
 
     /**
+     * A band between two offsets, as in "UTC-10 to UTC+14".
+     *
+     * <p>Matched against the RAW location, not the normalised one. {@link #normalize}
+     * turns a hyphen between word characters into a space, so by the time the string
+     * reaches the single-zone pattern "utc-10" has become "utc 10" and only the upper
+     * bound still looks like an offset. Five live postings reading
+     * "Anywhere (UTC-10 to UTC+14)" were therefore stored as "UTC+14", which reads as
+     * a restriction to one edge of the planet rather than the whole of it.
+     */
+    private static final Pattern TIMEZONE_BAND = Pattern.compile(
+            "(utc|gmt)\\s*([+-]\\s*\\d{1,2})\\s*(?:to|through|\\u2013|\\u2014|-)\\s*"
+                    + "(?:utc|gmt)?\\s*([+-]\\s*\\d{1,2})",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
      * A named timezone. Searched before {@link #TIMEZONE_OVERLAP} because regex
      * alternation returns the <em>leftmost</em> match, not the most specific one:
      * folded into one pattern, "must overlap with CET" yields "overlap with" and
      * the actual zone is lost.
      */
     private static final Pattern TIMEZONE_ZONE = Pattern.compile(
-            "\\b(utc[+-]\\d{1,2}|gmt[+-]\\d{1,2}|gmt|[ecmp][sd]t|cet|cest|eet|ist|jst|aest)\\b");
+            "\\b(utc\\s*[+-]\\s*\\d{1,2}|gmt\\s*[+-]\\s*\\d{1,2}|gmt|[ecmp][sd]t|cet|cest|eet|ist|jst|aest)\\b",
+            Pattern.CASE_INSENSITIVE);
 
     /** An overlap requirement with no zone named: still a geo gate, just a vaguer one. */
     private static final Pattern TIMEZONE_OVERLAP = Pattern.compile(
@@ -149,7 +165,7 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
             return Classification.notRemote(VERSION);
         }
 
-        String timezone = findTimezone(location);
+        String timezone = findTimezone(posting.locationRaw());
 
         // 3. Resolve places first. This has to happen before the worldwide test,
         //    because the words that promise the world and the words that take it
@@ -185,6 +201,45 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
                 !explicit && (ANYWHERE_IN_PLACE.matcher(location).find() || !countries.isEmpty());
 
         if (saysWorldwide && !qualifiedByPlace) {
+            // Last gate: a place named in the TITLE takes the badge away.
+            //
+            // This is the mirror of the rule above, and the asymmetry is the point.
+            // A title promising openness ("Global Head of ...") describes the work
+            // and earns nothing. A title naming a place -- "US Remote Technical
+            // Support Advisor", "Data Architect (100% Remote) (EMEA Only)", "Account
+            // Manager (US)", "Senior Solutions Engineer- LATAM" -- is the employer
+            // writing down a restriction, and nineteen such roles were sitting on
+            // the worldwide feed because only the location field was consulted.
+            //
+            // Believing the restriction and doubting the promise is not ad hoc: a
+            // wrong COUNTRY badge disappoints one reader, a wrong WORLDWIDE badge
+            // discredits the board. Where the two fields disagree, the narrower one
+            // is the safe reading.
+            //
+            // Only regions and countries are read from a title, never cities or
+            // subdivisions: "Austin", "Boston" and "Georgia" are also ordinary words
+            // and names, and a title is prose in a way a location field is not.
+            Set<String> titleRegions = findRegions(title);
+            Set<String> titleCountries = namedCountries(title);
+
+            if (!titleRegions.isEmpty() || !titleCountries.isEmpty()) {
+                // Lower confidence than an ordinary gated role: the two fields
+                // genuinely disagree, and this is the conservative reading of a
+                // conflict rather than a posting that stated one thing clearly.
+                if (!titleRegions.isEmpty()) {
+                    String detail = String.join(", ", titleRegions);
+                    if (!titleCountries.isEmpty()) {
+                        detail += " (" + String.join(", ", titleCountries) + ")";
+                    }
+                    return new Classification(true, GeoScope.REGION, detail, timezone, 0.8, VERSION);
+                }
+                return titleCountries.size() > 1
+                        ? new Classification(true, GeoScope.REGION,
+                                String.join(", ", titleCountries), timezone, 0.8, VERSION)
+                        : new Classification(true, GeoScope.COUNTRY,
+                                titleCountries.iterator().next(), timezone, 0.8, VERSION);
+            }
+
             // A stated timezone band contradicts "anywhere", so drop confidence
             // rather than silently honouring a promise the posting does not make.
             double confidence = timezone == null ? 0.95 : 0.65;
@@ -251,6 +306,25 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
      * de-duplicated set of codes, so "Remote - Ontario, Canada" yields a single CA
      * rather than looking like a two-country region.
      */
+    /**
+     * Country names only -- no states, provinces or cities.
+     *
+     * <p>Used when reading a title, where the looser tables do more harm than good:
+     * a job title is prose, and "Austin" or "Boston" in one is as likely to be a
+     * person as a place.
+     */
+    private static Set<String> namedCountries(String text) {
+        Set<String> found = new LinkedHashSet<>();
+        Geography.COUNTRIES.entrySet().stream()
+                .sorted((a, b) -> Integer.compare(a.getKey().length(), b.getKey().length()))
+                .forEach(entry -> {
+                    if (containsWord(text, entry.getKey())) {
+                        found.add(entry.getValue());
+                    }
+                });
+        return found;
+    }
+
     private static Set<String> findCountries(String location) {
         Set<String> found = new LinkedHashSet<>();
         // Longest alias first so "united states" wins before bare "us" can match,
@@ -298,11 +372,28 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
         }
     }
 
-    private static String findTimezone(String location) {
-        Matcher zone = TIMEZONE_ZONE.matcher(location);
-        if (zone.find()) {
-            return zone.group().toUpperCase(Locale.ROOT);
+    /**
+     * Reads a timezone requirement out of the location as the board wrote it.
+     *
+     * <p>Takes the raw string rather than the normalised one so that offset signs
+     * survive; see {@link #TIMEZONE_BAND}. A band is reported whole, because half a
+     * band is worse than none: "UTC+14" alone names the far edge of the world where
+     * the posting said the whole of it.
+     */
+    private static String findTimezone(String raw) {
+        if (raw == null) {
+            return null;
         }
-        return TIMEZONE_OVERLAP.matcher(location).find() ? "OVERLAP_REQUIRED" : null;
+        Matcher band = TIMEZONE_BAND.matcher(raw);
+        if (band.find()) {
+            return "UTC%s to UTC%s".formatted(
+                    band.group(2).replaceAll("\\s+", ""), band.group(3).replaceAll("\\s+", ""));
+        }
+        Matcher zone = TIMEZONE_ZONE.matcher(raw);
+        if (zone.find()) {
+            return zone.group().replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
+        }
+        return TIMEZONE_OVERLAP.matcher(raw.toLowerCase(Locale.ROOT)).find()
+                ? "OVERLAP_REQUIRED" : null;
     }
 }

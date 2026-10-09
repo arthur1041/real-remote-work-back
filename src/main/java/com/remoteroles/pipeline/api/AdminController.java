@@ -69,4 +69,10 @@ public class AdminController {
     public ScopeRechecker.Result recheckWorldwide() {
         return rechecker.recheckWorldwide();
     }
+
+    /** Retires stored listings that were never roles. See JobRepository#retireNonRoles. */
+    @PostMapping("/retire/non-roles")
+    public Map<String, Integer> retireNonRoles() {
+        return Map.of("closed", jobs.retireNonRoles());
+    }
 }

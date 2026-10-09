@@ -5,6 +5,7 @@ import com.remoteroles.pipeline.domain.AtsType;
 import com.remoteroles.pipeline.domain.CanonicalJob;
 import com.remoteroles.pipeline.domain.Company;
 import com.remoteroles.pipeline.domain.FetchedPosting;
+import com.remoteroles.pipeline.normalize.GenericPosting;
 import com.remoteroles.pipeline.normalize.Normalizer;
 import com.remoteroles.pipeline.repo.CompanyRepository;
 import com.remoteroles.pipeline.repo.JobRepository;
@@ -72,6 +73,13 @@ public class FeedIngestionService {
 
                 for (FetchedPosting posting : postings) {
                     try {
+                        // Talent pools and application funnels are not roles; see
+                        // GenericPosting. Feeds carry them too, and a feed posting
+                        // never disappears on its own, so the cheapest place to stop
+                        // them is before they are ever written.
+                        if (GenericPosting.isNotARole(posting.title())) {
+                            continue;
+                        }
                         if (persist(feed.source(), posting, employerIds) == JobRepository.UpsertOutcome.CREATED) {
                             created++;
                         } else {
