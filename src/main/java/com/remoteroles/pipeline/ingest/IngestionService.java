@@ -156,6 +156,13 @@ public class IngestionService {
             log.info("ingest run {}: office country resolved for {} new employers", runId, located);
         }
 
+        // Same reasoning for pay: Ashby states it as typed data, and payloads stored
+        // before anything read them still hold it.
+        int priced = jobs.refreshAshbySalaries();
+        if (priced > 0) {
+            log.info("ingest run {}: salary recovered for {} listings", runId, priced);
+        }
+
         Duration elapsed = Duration.between(startedAt, Instant.now());
         String notes = "elapsed=" + elapsed.toSeconds() + "s, feedFailures=" + feedSummary.failed();
         runs.finish(runId, active.size(), ok.get(), failed.get(),

@@ -41,8 +41,10 @@ public record FetchedPosting(
 
         /**
          * Structured salary, when the source states it rather than burying it in
-         * prose. Only Himalayas does, and only on a minority of postings -- the
-         * rest stay null rather than being guessed at from the description.
+         * prose. Himalayas publishes it on a feed field; Ashby publishes it as
+         * typed compensation components. Everything else stays null rather than
+         * being guessed at from the description -- a misparsed salary is worse
+         * than no salary.
          */
         java.math.BigDecimal salaryMin,
         java.math.BigDecimal salaryMax,
@@ -59,5 +61,20 @@ public record FetchedPosting(
         return new FetchedPosting(externalId, title, applyUrl, locationRaw, descriptionHtml,
                 postedAt, remoteHint, department, employmentType, rawPayload, null, null,
                 null, null, null, null, null);
+    }
+
+    /**
+     * The same posting with a salary attached.
+     *
+     * <p>Separate from {@link #ats} because salary arrives from a different part of
+     * the response than the rest of the posting, and only on the boards that choose
+     * to publish it. Folding four more parameters into a factory that three fetchers
+     * already call positionally would cost more than it saves.
+     */
+    public FetchedPosting withSalary(java.math.BigDecimal min, java.math.BigDecimal max,
+                                     String currency, String period) {
+        return new FetchedPosting(externalId, title, applyUrl, locationRaw, descriptionHtml,
+                postedAt, remoteHint, department, employmentType, rawPayload, employerName,
+                expiresAt, min, max, currency, period, seniority);
     }
 }

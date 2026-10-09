@@ -16,6 +16,9 @@ import java.util.List;
  * pre-rendered {@code descriptionHtml}, and location strings that are already
  * shaped like {@code "Remote (EMEA)"} -- which the region classifier reads directly.
  *
+ * <p>It is also the only ATS here that publishes pay as typed data rather than
+ * prose, which is why {@code includeCompensation=true} is on the URL.
+ *
  * <p>Two things to respect. {@code isListed=false} marks postings the company has
  * deliberately unpublished, and republishing those would be both wrong and rude.
  * And Ashby serves the entire board in one response with no pagination, which for
@@ -66,7 +69,7 @@ public class AshbyFetcher implements AtsFetcher {
                 continue;
             }
 
-            out.add(FetchedPosting.ats(
+            FetchedPosting posting = FetchedPosting.ats(
                     externalId,
                     title,
                     applyUrl,
@@ -77,7 +80,12 @@ public class AshbyFetcher implements AtsFetcher {
                     Json.text(job, "department"),
                     Json.text(job, "employmentType"),
                     job.toString()
-            ));
+            );
+
+            AshbyCompensation.Pay pay = AshbyCompensation.read(job);
+            out.add(pay == null
+                    ? posting
+                    : posting.withSalary(pay.min(), pay.max(), pay.currency(), pay.period()));
         }
         return out;
     }

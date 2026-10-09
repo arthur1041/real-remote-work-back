@@ -1,11 +1,15 @@
 package com.remoteroles.pipeline.repo;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.remoteroles.pipeline.ats.AshbyCompensation;
 import com.remoteroles.pipeline.domain.CanonicalJob;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 
 @Repository
 public class JobRepository {
@@ -173,5 +177,69 @@ public class JobRepository {
                 .query(Integer.class)
                 .single();
         return n == null ? 0 : n;
+    }
+
+    /**
+     * Fills in salaries from Ashby payloads already on disk.
+     *
+     * <p>Ashby has been asked for compensation since the board was first polled, so
+     * the numbers are sitting in {@code raw_postings} for thousands of listings that
+     * were ingested before anything read them. Waiting for the natural re-fetch to
+     * surface those would mean a board where pay shows on 0.7% of cards until every
+     * company's turn comes round again.
+     *
+     * <p>Only null salaries are touched, so a figure that came from the live fetch is
+     * never overwritten by an older payload, and the parse is
+     * {@link AshbyCompensation} itself rather than a second copy of the rules in SQL.
+     */
+    public int refreshAshbySalaries() {
+        record Candidate(long jobId, String payload) {}
+        List<Candidate> candidates = db.sql("""
+                with latest as (
+                  select distinct on (r.company_id, r.external_id)
+                         r.company_id, r.external_id, r.payload
+                    from raw_postings r
+                   where r.ats_type = 'ASHBY'
+                   order by r.company_id, r.external_id, r.fetched_at desc
+                )
+                select j.id as job_id, l.payload::text as payload
+                  from latest l
+                  join jobs j
+                    on j.company_id = l.company_id
+                   and j.external_id = l.external_id
+                 where j.salary_min is null
+                   and j.salary_max is null
+                """)
+                .query((rs, n) -> new Candidate(rs.getLong("job_id"), rs.getString("payload")))
+                .list();
+
+        ObjectMapper mapper = new ObjectMapper();
+        int updated = 0;
+        for (Candidate c : candidates) {
+            AshbyCompensation.Pay pay;
+            try {
+                JsonNode node = mapper.readTree(c.payload());
+                pay = AshbyCompensation.read(node);
+            } catch (Exception e) {
+                continue; // an unparseable stored payload is not worth failing a run over
+            }
+            if (pay == null) {
+                continue;
+            }
+            updated += db.sql("""
+                            update jobs
+                               set salary_min = :min, salary_max = :max,
+                                   salary_currency = :cur, salary_period = :per
+                             where id = :id
+                               and salary_min is null and salary_max is null
+                            """)
+                    .param("min", pay.min())
+                    .param("max", pay.max())
+                    .param("cur", pay.currency())
+                    .param("per", pay.period())
+                    .param("id", c.jobId())
+                    .update();
+        }
+        return updated;
     }
 }
