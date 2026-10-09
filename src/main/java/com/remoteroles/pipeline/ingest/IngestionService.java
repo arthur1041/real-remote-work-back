@@ -149,6 +149,13 @@ public class IngestionService {
         updated.addAndGet(feedSummary.updated());
         closed.addAndGet(feedSummary.expired());
 
+        // Employer addresses come from payloads this run just stored, so this
+        // follows the fetches rather than preceding them.
+        int located = companies.refreshHqCountries();
+        if (located > 0) {
+            log.info("ingest run {}: office country resolved for {} new employers", runId, located);
+        }
+
         Duration elapsed = Duration.between(startedAt, Instant.now());
         String notes = "elapsed=" + elapsed.toSeconds() + "s, feedFailures=" + feedSummary.failed();
         runs.finish(runId, active.size(), ok.get(), failed.get(),

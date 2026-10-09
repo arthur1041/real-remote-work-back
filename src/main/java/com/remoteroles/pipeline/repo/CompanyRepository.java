@@ -4,6 +4,9 @@ import com.remoteroles.pipeline.domain.AtsType;
 import com.remoteroles.pipeline.domain.Company;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import com.remoteroles.pipeline.normalize.Geography;
+import java.util.HashMap;
+import java.util.Map;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -130,5 +133,71 @@ public class CompanyRepository {
             return null;
         }
         return s.length() <= max ? s : s.substring(0, max);
+    }
+
+    /**
+     * Resolves each employer's office country from payloads already stored.
+     *
+     * <p>Done here rather than threaded through every fetcher as another field on
+     * FetchedPosting: an address is a property of the employer, not of the
+     * posting, and five fetchers would each have had to learn a different JSON
+     * shape to fill a column one pass can fill. The payload is kept anyway.
+     *
+     * <p>The candidate strings are not trustworthy. A Greenhouse office field
+     * contains "Remote", "Worldwide", "Any Location", "08018 Barcelona" and "NY"
+     * as often as it contains a country, and spells the same country "USA" and
+     * "United States". Everything goes through the gazetteer, and anything that
+     * does not resolve is dropped -- "HQ Remote" on a card would be worse than no
+     * HQ at all.
+     *
+     * <p>Only fills blanks, so a board that stops publishing its address does not
+     * erase what we already knew.
+     *
+     * @return how many employers gained a country on this pass
+     */
+    public int refreshHqCountries() {
+        record Candidate(long companyId, String raw) {}
+        List<Candidate> candidates = db.sql("""
+                with latest as (
+                  select distinct on (company_id, external_id)
+                         company_id, ats_type, payload
+                  from raw_postings
+                  order by company_id, external_id, fetched_at desc
+                )
+                select l.company_id,
+                       coalesce(
+                         l.payload #>> '{address,postalAddress,addressCountry}',
+                         l.payload #>> '{offices,0,location}'
+                       ) as raw
+                  from latest l
+                  join companies c on c.id = l.company_id
+                 where c.hq_country is null
+                """)
+                .query((rs, n) -> new Candidate(rs.getLong("company_id"), rs.getString("raw")))
+                .list();
+
+        // Most frequent resolved code per company wins: a board with offices in
+        // several countries should report the one it posts from most.
+        Map<Long, Map<String, Integer>> tally = new HashMap<>();
+        for (Candidate c : candidates) {
+            String code = Geography.countryCode(c.raw());
+            if (code == null) continue;
+            tally.computeIfAbsent(c.companyId(), k -> new HashMap<>())
+                 .merge(code, 1, Integer::sum);
+        }
+
+        int updated = 0;
+        for (Map.Entry<Long, Map<String, Integer>> e : tally.entrySet()) {
+            String best = e.getValue().entrySet().stream()
+                    .max(Map.Entry.comparingByValue())
+                    .map(Map.Entry::getKey)
+                    .orElse(null);
+            if (best == null) continue;
+            updated += db.sql("update companies set hq_country = :c where id = :id and hq_country is null")
+                    .param("c", best)
+                    .param("id", e.getKey())
+                    .update();
+        }
+        return updated;
     }
 }

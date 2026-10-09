@@ -15,7 +15,7 @@ import java.util.Set;
  * {@code "US remote"}, {@code "Remote-USA"}, {@code "Remote USA"}). Alias tables
  * are not optional here; they are the job.
  */
-final class Geography {
+public final class Geography {
 
     private Geography() {
     }
@@ -237,5 +237,34 @@ final class Geography {
         for (String alias : aliases) {
             COUNTRIES.put(alias, code);
         }
+    }
+
+    /**
+     * Resolves a board's free-text place string to a country code, or nothing.
+     *
+     * <p>Exposed for the employer-address pass, which has to cope with whatever a
+     * careers page typed into an office field: "United States", "USA", "Remote",
+     * "Worldwide", "08018 Barcelona", "NY". Returning null for everything that is
+     * not a country is the point -- a card that says "HQ Remote" is worse than a
+     * card that says nothing.
+     *
+     * <p>Tries the whole string first, then its comma-separated segments from the
+     * right, because office strings read "Los Angeles, California, United States"
+     * and the country is last.
+     */
+    public static String countryCode(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String cleaned = raw.toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[()\\[\\]]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        String whole = COUNTRIES.get(cleaned);
+        if (whole != null) return whole;
+        String[] parts = cleaned.split("\\s*,\\s*");
+        for (int i = parts.length - 1; i >= 0; i--) {
+            String code = COUNTRIES.get(parts[i].trim());
+            if (code != null) return code;
+        }
+        return null;
     }
 }
