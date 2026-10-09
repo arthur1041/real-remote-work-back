@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.remoteroles.pipeline.ats.AshbyCompensation;
 import com.remoteroles.pipeline.domain.CanonicalJob;
+import com.remoteroles.pipeline.domain.Classification;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -241,5 +242,54 @@ public class JobRepository {
                     .update();
         }
         return updated;
+    }
+
+    /** A listing's classifier inputs, for re-running a scope decision over stored rows. */
+    public record ScopeCandidate(long id, String title, String locationRaw, String geoScope) {
+    }
+
+    /**
+     * The rows currently badged WORLDWIDE, with what the classifier reads.
+     *
+     * <p>Deliberately only the worldwide ones. The classifier also takes the ATS's
+     * own {@code isRemote} boolean, which is not persisted -- it is an input, not a
+     * verdict -- so a general re-run would have to invent it and could demote a
+     * remote role to onsite. Every row here is already {@code is_remote}, so the
+     * hint is safely true and the only thing that can move is the scope.
+     *
+     * <p>That is also the set worth rechecking. WORLDWIDE is the claim the site is
+     * built on; a wrong COUNTRY badge disappoints one reader, a wrong WORLDWIDE
+     * badge discredits the board.
+     */
+    public List<ScopeCandidate> worldwideForRecheck() {
+        return db.sql("""
+                        select id, title, location_raw, geo_scope
+                          from jobs
+                         where closed_at is null
+                           and geo_scope = 'WORLDWIDE'
+                        """)
+                .query((rs, n) -> new ScopeCandidate(
+                        rs.getLong("id"), rs.getString("title"),
+                        rs.getString("location_raw"), rs.getString("geo_scope")))
+                .list();
+    }
+
+    /** Writes a re-run verdict over one listing. */
+    public int updateScope(long id, Classification c) {
+        return db.sql("""
+                        update jobs
+                           set geo_scope = :scope, geo_detail = :detail,
+                               timezone_requirement = :tz,
+                               classification_confidence = :conf,
+                               classified_by = :by
+                         where id = :id
+                        """)
+                .param("scope", c.geoScope() == null ? null : c.geoScope().name())
+                .param("detail", c.geoDetail())
+                .param("tz", c.timezoneRequirement())
+                .param("conf", c.confidence())
+                .param("by", c.classifiedBy())
+                .param("id", id)
+                .update();
     }
 }

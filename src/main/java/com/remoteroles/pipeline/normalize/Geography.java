@@ -106,11 +106,14 @@ public final class Geography {
         country("IL", "israel");
         country("AE", "united arab emirates", "uae");
         country("SA", "saudi arabia", "ksa");
+        country("QA", "qatar");
         country("ZA", "south africa");
         country("NG", "nigeria");
         country("KE", "kenya");
         country("EG", "egypt");
-        country("IN", "india");
+        // "IND" is Greenhouse house style and appears on 78 live postings --
+        // "Bangalore, IND", "Mohali, IND", "IND-Remote" -- never as anything else.
+        country("IN", "india", "ind");
         country("SG", "singapore");
         country("JP", "japan");
         country("KR", "korea (republic of)", "republic of korea", "south korea", "korea");
@@ -200,7 +203,8 @@ public final class Geography {
 
         city("US", "san francisco", "new york city", "new york", "nyc", "sf bay area",
                 "seattle", "los angeles", "boston", "chicago", "denver", "austin",
-                "atlanta", "washington d.c.", "washington dc", "washington, d.c.");
+                "atlanta", "washington d.c.", "washington dc", "washington, d.c.",
+                "washington, dc");
         city("GB", "london", "manchester", "edinburgh");
         city("DE", "berlin", "munich", "münchen", "hamburg");
         city("PT", "lisbon", "lisboa", "porto");

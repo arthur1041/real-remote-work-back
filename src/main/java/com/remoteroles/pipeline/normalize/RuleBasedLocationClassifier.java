@@ -23,6 +23,10 @@ import java.util.regex.Pattern;
  * phrase -- "anywhere", "worldwide", "globally". Being honestly unsure is worth
  * more than being confidently wrong, because the no-geo-gate promise is the only
  * reason anyone picks this site over Indeed.
+ *
+ * <p>For the same reason, eligibility is read from the location field alone. A job
+ * title is written to describe the work, so "global" in one is an adjective about
+ * scope, not a statement about hiring.
  */
 @Component
 public class RuleBasedLocationClassifier implements LocationClassifier {
@@ -109,12 +113,29 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
         }
 
         boolean atsSaysRemote = Boolean.TRUE.equals(posting.remoteHint());
+
+        // The title is evidence that a role is remote. It is NOT evidence of who may
+        // be hired, and conflating the two put a worldwide badge on fourteen roles
+        // that were plainly gated: "US External Affairs Associate, Global Affairs" in
+        // Washington DC, "Financial Representative, Global Accounts Payable" in
+        // Mohali, "Salesforce Platform Lead for Global Industrial Company" in a
+        // posting whose location field reads "North America Only".
+        //
+        // In a title, "global" and "worldwide" describe the SCOPE OF THE WORK -- a
+        // Global Head of Cloud Alliances manages alliances globally, from one
+        // country. Eligibility is stated in the location field, so only the location
+        // decides it. Checked against the corpus before changing: of the postings
+        // whose title says anywhere or worldwide, every single one says it in the
+        // location too, so the title has never been the sole source of a correct
+        // WORLDWIDE. It was only ever the sole source of wrong ones.
+        boolean saysWorldwide = WORLDWIDE.matcher(location).find();
+
         // "Work from anywhere" and "Worldwide" are remote signals in their own right.
         // Requiring the literal word "remote" dropped the most unambiguously
         // location-independent postings on the floor -- precisely the ones this site
-        // exists to surface.
-        boolean saysWorldwide = WORLDWIDE.matcher(location).find() || WORLDWIDE.matcher(title).find();
+        // exists to surface. This is the one job the title still does.
         boolean textSaysRemote = saysWorldwide
+                || WORLDWIDE.matcher(title).find()
                 || REMOTE.matcher(location).find()
                 || REMOTE.matcher(title).find();
 

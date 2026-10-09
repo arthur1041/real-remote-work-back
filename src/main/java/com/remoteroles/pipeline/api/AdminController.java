@@ -1,6 +1,7 @@
 package com.remoteroles.pipeline.api;
 
 import com.remoteroles.pipeline.ingest.IngestionService;
+import com.remoteroles.pipeline.normalize.ScopeRechecker;
 import com.remoteroles.pipeline.repo.JobRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,10 +26,13 @@ public class AdminController {
 
     private final IngestionService ingestion;
     private final JobRepository jobs;
+    private final ScopeRechecker rechecker;
 
-    public AdminController(IngestionService ingestion, JobRepository jobs) {
+    public AdminController(IngestionService ingestion, JobRepository jobs,
+                           ScopeRechecker rechecker) {
         this.ingestion = ingestion;
         this.jobs = jobs;
+        this.rechecker = rechecker;
     }
 
     @GetMapping("/health")
@@ -52,5 +56,17 @@ public class AdminController {
     @PostMapping("/backfill/salaries")
     public Map<String, Integer> backfillSalaries() {
         return Map.of("updated", jobs.refreshAshbySalaries());
+    }
+
+    /**
+     * Replays the scope rules over listings already badged WORLDWIDE.
+     *
+     * <p>For use the moment a classifier rule changes. Without it a corrected rule
+     * only reaches the board as each source's turn comes round, which for the
+     * budgeted feeds is weeks.
+     */
+    @PostMapping("/recheck/worldwide")
+    public ScopeRechecker.Result recheckWorldwide() {
+        return rechecker.recheckWorldwide();
     }
 }
