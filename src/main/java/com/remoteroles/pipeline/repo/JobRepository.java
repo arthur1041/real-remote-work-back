@@ -88,6 +88,13 @@ public class JobRepository {
                             expires_at                = excluded.expires_at,
                             dedupe_key                = excluded.dedupe_key,
                             last_seen_at              = now(),
+                            -- Moves only when the content really moved. The
+                            -- sitemap publishes this as <lastmod>, and a page
+                            -- that announces a change it did not make teaches
+                            -- Google to ignore the field.
+                            content_changed_at        = case
+                                when jobs.content_hash is distinct from excluded.content_hash
+                                then now() else jobs.content_changed_at end,
                             closed_at                 = null
                         returning (xmax = 0) as created
                         """)
