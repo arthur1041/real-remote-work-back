@@ -61,31 +61,77 @@ public class DigestSender {
 
     record Role(long id, String title, String company, String location) {}
 
-    @Scheduled(cron = "${newsletter.digest.cron:0 0 13 * * TUE}")
+    /** What the admin area last saved. Read fresh on every wake-up. */
+    record Settings(boolean enabled, int intervalHours, String audience, int minJobs, int maxJobs) {}
+
+    private Settings settings() {
+        return db.sql("""
+                        select enabled, interval_hours, audience, min_jobs, max_jobs
+                        from newsletter_settings where id = 1
+                        """)
+                .query((rs, n) -> new Settings(
+                        rs.getBoolean("enabled"),
+                        rs.getInt("interval_hours"),
+                        rs.getString("audience"),
+                        rs.getInt("min_jobs"),
+                        rs.getInt("max_jobs")))
+                .optional()
+                .orElse(new Settings(false, 168, "CONFIRMED", minJobs, maxJobs));
+    }
+
+    /**
+     * Wakes hourly and sends only if the stored interval has elapsed.
+     *
+     * <p>The cadence is a row rather than a cron expression so it can be changed
+     * from the admin area without a deploy. Waking often and deciding late is
+     * what makes that possible: a schedule compiled into the annotation would
+     * have to be rebuilt to move.
+     */
+    @Scheduled(cron = "${newsletter.digest.cron:0 5 * * * *}")
     public void run() {
         sendIssue();
     }
 
+    /** Sends now if anything other than the clock allows it. */
+    public int sendIssueNow() {
+        return send(true);
+    }
+
     /** Returns how many recipients were mailed; zero means the issue was skipped. */
     public int sendIssue() {
+        return send(false);
+    }
+
+    private int send(boolean ignoreInterval) {
         if (!mailer.isDeliveryEnabled()) {
             return 0;
         }
 
-        Instant since = lastIssueAt();
-        List<Role> roles = newWorldwideRoles(since);
-
-        // An empty or nearly empty issue is worse than no issue: it spends the
-        // one habit that matters, which is that opening this is worth doing.
-        if (roles.size() < minJobs) {
-            log.info("digest skipped: {} new worldwide roles since {}, minimum is {}",
-                    roles.size(), since, minJobs);
+        Settings config = settings();
+        if (!config.enabled()) {
             return 0;
         }
 
-        List<SubscriberRepository.Recipient> audience = subscribers.digestAudience(5_000);
+        Instant since = lastIssueAt();
+        if (!ignoreInterval
+                && Instant.now().isBefore(since.plus(config.intervalHours(), ChronoUnit.HOURS))) {
+            return 0;
+        }
+
+        List<Role> roles = newWorldwideRoles(since, config.maxJobs());
+
+        // An empty or nearly empty issue is worse than no issue: it spends the
+        // one habit that matters, which is that opening this is worth doing.
+        if (roles.size() < config.minJobs()) {
+            log.info("digest skipped: {} new worldwide roles since {}, minimum is {}",
+                    roles.size(), since, config.minJobs());
+            return 0;
+        }
+
+        List<SubscriberRepository.Recipient> audience =
+                subscribers.digestAudience(config.audience(), 5_000);
         if (audience.isEmpty()) {
-            log.info("digest skipped: no confirmed subscribers");
+            log.info("digest skipped: no recipients for audience {}", config.audience());
             return 0;
         }
 
@@ -119,7 +165,7 @@ public class DigestSender {
                 .orElse(Instant.now().minus(7, ChronoUnit.DAYS));
     }
 
-    private List<Role> newWorldwideRoles(Instant since) {
+    private List<Role> newWorldwideRoles(Instant since, int limit) {
         return db.sql("""
                         select j.id, j.title, c.name as company,
                                coalesce(j.location_raw, 'Anywhere in the World') as location
@@ -134,7 +180,7 @@ public class DigestSender {
                         limit :limit
                         """)
                 .param("since", Timestamp.from(since))
-                .param("limit", maxJobs)
+                .param("limit", limit)
                 .query((rs, n) -> new Role(
                         rs.getLong("id"),
                         rs.getString("title"),

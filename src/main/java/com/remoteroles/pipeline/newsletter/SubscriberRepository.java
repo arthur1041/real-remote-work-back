@@ -93,14 +93,21 @@ public class SubscriberRepository {
      * unsubscribe link, and the second is both illegal and the fastest route to
      * a blocked sending domain.
      */
-    public List<Recipient> digestAudience(int limit) {
+    public List<Recipient> digestAudience(String audience, int limit) {
+        // UNSUBSCRIBED and BLOCKED are excluded under either setting, and that is
+        // not configurable. Opting out has to stick, and an address blocked by
+        // hand was blocked for a reason that widening the audience does not undo.
+        String statuses = "ALL".equals(audience)
+                ? "('PENDING', 'CONFIRMED')"
+                : "('CONFIRMED')";
+
         return db.sql("""
                         select id, email, unsubscribe_token
                         from subscribers
-                        where status = 'CONFIRMED'
+                        where status in %s
                         order by created_at
                         limit :limit
-                        """)
+                        """.formatted(statuses))
                 .param("limit", limit)
                 .query((rs, n) -> new Recipient(
                         rs.getLong("id"),

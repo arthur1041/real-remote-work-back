@@ -5,6 +5,7 @@ import com.remoteroles.pipeline.normalize.ScopeRechecker;
 import com.remoteroles.pipeline.repo.JobRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import com.remoteroles.pipeline.newsletter.DigestSender;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -24,15 +25,17 @@ import java.util.Map;
 @RequestMapping("/admin")
 public class AdminController {
 
+    private final DigestSender digest;
     private final IngestionService ingestion;
     private final JobRepository jobs;
     private final ScopeRechecker rechecker;
 
-    public AdminController(IngestionService ingestion, JobRepository jobs,
+    public AdminController(DigestSender digest, IngestionService ingestion, JobRepository jobs,
                            ScopeRechecker rechecker) {
         this.ingestion = ingestion;
         this.jobs = jobs;
         this.rechecker = rechecker;
+        this.digest = digest;
     }
 
     @GetMapping("/health")
@@ -71,6 +74,18 @@ public class AdminController {
     }
 
     /** Retires stored listings that were never roles. See JobRepository#retireNonRoles. */
+    /**
+     * Sends the digest now, ignoring how long it has been since the last one.
+     *
+     * <p>Everything else it checks still applies: the kill switch, the minimum
+     * number of new roles, and whether there is anyone to send to. This bypasses
+     * the clock, not the guards.
+     */
+    @PostMapping("/newsletter/send")
+    public Map<String, Integer> sendDigestNow() {
+        return Map.of("recipients", digest.sendIssueNow());
+    }
+
     @PostMapping("/retire/non-roles")
     public Map<String, Integer> retireNonRoles() {
         return Map.of("closed", jobs.retireNonRoles());
