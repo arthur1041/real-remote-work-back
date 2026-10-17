@@ -53,4 +53,45 @@ public class SubscriberRepository {
                 .query(String.class)
                 .list();
     }
+
+    /** One address waiting to be asked whether it really wants this. */
+    public record Awaiting(long id, String email, String confirmToken, String unsubscribeToken) {}
+
+    /**
+     * Addresses captured but never asked to confirm, oldest first.
+     *
+     * <p>Oldest first is deliberate: if a backlog ever forms, the people who have
+     * been waiting longest are the ones least likely to remember signing up, and
+     * they are the ones whose confirmation is most at risk of being marked spam.
+     */
+    public List<Awaiting> awaitingConfirmation(int limit) {
+        return db.sql("""
+                        select id, email, confirm_token, unsubscribe_token
+                        from subscribers
+                        where status = 'PENDING' and confirmation_sent_at is null
+                        order by created_at
+                        limit :limit
+                        """)
+                .param("limit", limit)
+                .query((rs, n) -> new Awaiting(
+                        rs.getLong("id"),
+                        rs.getString("email"),
+                        rs.getString("confirm_token"),
+                        rs.getString("unsubscribe_token")))
+                .list();
+    }
+
+    /**
+     * Stamps an address as asked.
+     *
+     * <p>Called before the send, not after. A crash between the two costs one
+     * unsent confirmation, which a person can fix; stamping afterwards would,
+     * on the same crash, re-select the row next minute and keep mailing the same
+     * person until someone noticed.
+     */
+    public void markConfirmationSent(long id) {
+        db.sql("update subscribers set confirmation_sent_at = now() where id = :id")
+                .param("id", id)
+                .update();
+    }
 }
