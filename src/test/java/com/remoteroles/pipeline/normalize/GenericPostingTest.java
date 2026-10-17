@@ -27,6 +27,13 @@ class GenericPostingTest {
             "Your Chance to Join Our Talent Community!",
             "Express Your Interest / Join Our Talent Community",
             "General Application",
+            // Four more spellings of the same thing, two of them not in English.
+            "Open Application",
+            "Open Application for Students",
+            "Spontaneous Application",
+            "Spontaneous application Interns & students",
+            "Profil Comptable - Candidature Spontanee",
+            "Initiativbewerbung - Deutschland",
             "Can't find a role for you? Submit a general application.",
             "Future Opportunities",
             "Future Opportunities in Sales",
@@ -58,6 +65,11 @@ class GenericPostingTest {
             "Senior Recruiter, Technical Talent",
             "Application Security Engineer",
             "Solutions Architect, Applications",
+            // "open" and "application" are both ordinary words; only together,
+            // in that order, do they name a funnel.
+            "Open Source Program Manager",
+            "Open Banking Integration Engineer",
+            "Senior Application Engineer",
             "Interest Rate Derivatives Analyst",
             "Senior Software Engineer",
     })

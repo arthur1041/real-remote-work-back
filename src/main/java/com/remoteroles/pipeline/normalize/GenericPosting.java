@@ -32,6 +32,17 @@ public final class GenericPosting {
             "talent\\s+(pool|community|network|pipeline)"
                     + "|general application"
                     + "|speculative application"
+                    // Same funnel, four more spellings. Every title in the corpus
+                    // matching these is a standing invitation rather than a job:
+                    // "Open Application", "Spontaneous application Finance",
+                    // "Profil Comptable - Candidature Spontanee",
+                    // "Initiativbewerbung - Deutschland". Checked before adding,
+                    // because a token that also catches real work is worse here
+                    // than one that catches nothing.
+                    + "|spontaneous application"
+                    + "|open application"
+                    + "|candidature spontan"
+                    + "|initiativbewerbung"
                     + "|expression of interest"
                     + "|future opportunit"
                     + "|^apply to\\b"

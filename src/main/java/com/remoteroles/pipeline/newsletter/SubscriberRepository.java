@@ -81,6 +81,41 @@ public class SubscriberRepository {
                 .list();
     }
 
+    /** A confirmed recipient, with the token that lets them leave. */
+    public record Recipient(long id, String email, String unsubscribeToken) {}
+
+    /**
+     * Everyone who may be mailed a digest.
+     *
+     * <p>CONFIRMED only, and the unsubscribe token travels with the address
+     * because every message has to carry a way out. Building the list without it
+     * would mean either a second query per recipient or a newsletter with no
+     * unsubscribe link, and the second is both illegal and the fastest route to
+     * a blocked sending domain.
+     */
+    public List<Recipient> digestAudience(int limit) {
+        return db.sql("""
+                        select id, email, unsubscribe_token
+                        from subscribers
+                        where status = 'CONFIRMED'
+                        order by created_at
+                        limit :limit
+                        """)
+                .param("limit", limit)
+                .query((rs, n) -> new Recipient(
+                        rs.getLong("id"),
+                        rs.getString("email"),
+                        rs.getString("unsubscribe_token")))
+                .list();
+    }
+
+    /** Records that a digest went to this address. */
+    public void markDigestSent(long id) {
+        db.sql("update subscribers set last_sent_at = now() where id = :id")
+                .param("id", id)
+                .update();
+    }
+
     /**
      * Stamps an address as asked.
      *

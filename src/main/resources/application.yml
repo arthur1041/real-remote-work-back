@@ -80,6 +80,21 @@ newsletter:
   # schedule rather than at capture time because the capture happens in the web
   # app and delivery lives here -- a minute of latency on a confirmation is
   # nothing, and it keeps mail in one process.
+  # Where a submission waiting for review is announced. Unset means no alert is
+  # sent, and the queue is only found by someone opening it.
+  review-alert-to: ${REVIEW_ALERT_TO:}
+
+  # The digest. Weekly, not daily: the subscription form promises "one message a
+  # week", and a list that is mailed more often than it was told is a list that
+  # reports the sender as spam.
+  digest:
+    enabled: ${NEWSLETTER_DIGEST_ENABLED:false}
+    cron: ${NEWSLETTER_DIGEST_CRON:0 0 13 * * TUE}
+    # Below this many new roles the issue is skipped rather than padded out. An
+    # empty newsletter is worse than none: it trains people not to open it.
+    min-jobs: ${NEWSLETTER_DIGEST_MIN_JOBS:5}
+    max-jobs: ${NEWSLETTER_DIGEST_MAX_JOBS:15}
+
   confirmation:
     enabled: ${NEWSLETTER_CONFIRMATION_ENABLED:true}
     cron: ${NEWSLETTER_CONFIRMATION_CRON:0 * * * * *}
