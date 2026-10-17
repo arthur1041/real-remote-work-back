@@ -140,6 +140,15 @@ public class JobRepository {
      * company has the first time their ATS throws a 503 -- the single most damaging
      * bug a job board can ship, because it is silent and looks like the site simply
      * has no jobs.
+     *
+     * <p>Directly posted roles are excluded, and the exclusion is load-bearing. An
+     * employer who posts here can be linked to a company we already read, so that
+     * their direct roles and their board roles share one page. Absence from a board
+     * fetch says nothing about a role that was never on that board -- their
+     * {@code last_seen_at} is frozen at submission and always older than the run --
+     * so without this clause the first successful fetch after a direct posting is
+     * approved would close it, silently, and the employer would watch the role they
+     * submitted vanish overnight.
      */
     public int closeStale(long companyId, Instant runStartedAt) {
         return db.sql("""
@@ -147,6 +156,7 @@ public class JobRepository {
                            set closed_at = now()
                          where company_id = :companyId
                            and closed_at is null
+                           and ats_type <> 'DIRECT'
                            and last_seen_at < :runStartedAt
                         """)
                 .param("companyId", companyId)

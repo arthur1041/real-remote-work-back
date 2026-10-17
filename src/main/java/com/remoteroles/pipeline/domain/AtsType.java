@@ -32,5 +32,20 @@ public enum AtsType {
      * bot challenge — yield a couple of hundred genuinely worldwide roles, where
      * Himalayas needs thousands of requests to find a comparable number.
      */
-    WEWORKREMOTELY
+    WEWORKREMOTELY,
+
+    /**
+     * Posted by the employer themselves, through the site.
+     *
+     * <p>The odd one out: there is nothing to fetch and no schedule to run. It
+     * occupies this column because a posting has to say where it came from, and
+     * because the ingest must never treat these rows as stale and retire them --
+     * nothing will ever "disappear from the board" to confirm they are still open,
+     * since there is no board to read.
+     *
+     * <p>It is also the only source where eligibility is answered rather than
+     * inferred. The employer is asked outright, and a human checks the answer
+     * before the role is published.
+     */
+    DIRECT
 }
