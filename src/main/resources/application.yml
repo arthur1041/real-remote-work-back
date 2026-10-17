@@ -104,3 +104,18 @@ newsletter:
 logging:
   level:
     com.remoteroles: INFO
+
+# Telling Google when a posting appears or goes away.
+#
+# Off unless a key file is configured. The API accepts only URLs carrying
+# JobPosting structured data, which is what every /jobs page here publishes.
+#
+# daily-budget is a self-imposed ceiling well under the default quota: the board
+# holds sixteen thousand postings and the quota is a couple of hundred calls a
+# day, so the notifier works through a capped batch each hour rather than trying
+# to announce the corpus and exhausting the day on its first slice.
+indexing:
+  enabled: ${INDEXING_ENABLED:false}
+  key-file: ${INDEXING_KEY_FILE:}
+  daily-budget: ${INDEXING_DAILY_BUDGET:180}
+  cron: ${INDEXING_CRON:0 25 * * * *}
