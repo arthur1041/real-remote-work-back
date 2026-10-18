@@ -4,6 +4,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Subscriber reads for the pipeline side.
@@ -149,20 +151,22 @@ public class SubscriberRepository {
      * a blocked sending domain.
      */
     public List<Recipient> digestAudience(String audience, int limit) {
-        // UNSUBSCRIBED, BLOCKED and INVITED are excluded under either setting, and
-        // that is not configurable. Opting out has to stick; an address blocked
-        // by hand was blocked for a reason that widening the audience does not
-        // undo; and an INVITED address was contacted once without asking, so
-        // letting "everyone" reach it would turn one invitation into the
-        // subscription the invitation exists to ask about.
-        String statuses = "ALL".equals(audience)
-                ? "('PENDING', 'CONFIRMED')"
-                : "('CONFIRMED')";
+        // The status list is an allowlist built in one place, and the extra
+        // clause is the one case a status cannot express: a PENDING row that
+        // carries an unsubscribed_at is somebody who left and whose address was
+        // typed into the form again. Returning them to PENDING is how a person
+        // rejoins; it must not be how a stranger puts them back. Only their own
+        // click on the confirmation link -- which is what CONFIRMED means --
+        // starts the mail again.
+        String statuses = audienceStatuses(audience).stream()
+                .map("'%s'"::formatted)
+                .collect(Collectors.joining(", ", "(", ")"));
 
         return db.sql("""
                         select id, email, unsubscribe_token
                         from subscribers
                         where status in %s
+                          and (status = 'CONFIRMED' or unsubscribed_at is null)
                         order by created_at
                         limit :limit
                         """.formatted(statuses))
@@ -172,6 +176,48 @@ public class SubscriberRepository {
                         rs.getString("email"),
                         rs.getString("unsubscribe_token")))
                 .list();
+    }
+
+    /**
+     * Every status a subscriber row may hold, as the CHECK constraint defines it.
+     *
+     * <p>Duplicated from the migration on purpose, and
+     * {@code DigestAudienceTest} reads the migration back and fails if the two
+     * ever disagree. A status added to the database without being classified
+     * below is a status nobody decided about, and the safe default -- not
+     * mailing it -- is only safe until somebody widens the audience without
+     * noticing it is there.
+     */
+    static final List<String> ALL_STATUSES =
+            List.of("PENDING", "CONFIRMED", "UNSUBSCRIBED", "BOUNCED", "BLOCKED", "INVITED");
+
+    /**
+     * Statuses no digest may ever reach, under any audience setting.
+     *
+     * <p>Not configurable, and not a matter of taste. Opting out has to stick.
+     * An address blocked by hand was blocked for a reason that widening the
+     * audience does not undo, and a bounced one costs sending reputation every
+     * time it is tried. INVITED is the subtle one: it is a stranger who was
+     * written to once without asking, and letting "everyone" reach them would
+     * turn a single invitation into the subscription that invitation exists to
+     * ask about. Invited addresses are a separate list that happens to share a
+     * table; they join this one by accepting, and not before.
+     */
+    static final Set<String> NEVER_MAILED =
+            Set.of("UNSUBSCRIBED", "BOUNCED", "BLOCKED", "INVITED");
+
+    /**
+     * The statuses one audience setting selects.
+     *
+     * <p>An allowlist rather than an exclusion, and the fallback is the narrow
+     * set rather than the wide one: an audience value this does not recognise --
+     * a typo in the settings row, a value written by a future migration -- sends
+     * to fewer people than intended, never more.
+     */
+    static List<String> audienceStatuses(String audience) {
+        return "ALL".equals(audience)
+                ? List.of("PENDING", "CONFIRMED")
+                : List.of("CONFIRMED");
     }
 
     /** Records that a digest went to this address. */
