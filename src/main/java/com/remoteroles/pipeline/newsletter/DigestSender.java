@@ -40,6 +40,7 @@ public class DigestSender {
     private final JdbcClient db;
     private final SubscriberRepository subscribers;
     private final Mailer mailer;
+    private final MailBudget budget;
     private final String siteUrl;
     private final int minJobs;
     private final int maxJobs;
@@ -48,12 +49,14 @@ public class DigestSender {
             JdbcClient db,
             SubscriberRepository subscribers,
             Mailer mailer,
+            MailBudget budget,
             @Value("${newsletter.site-url}") String siteUrl,
             @Value("${newsletter.digest.min-jobs:5}") int minJobs,
             @Value("${newsletter.digest.max-jobs:15}") int maxJobs) {
         this.db = db;
         this.subscribers = subscribers;
         this.mailer = mailer;
+        this.budget = budget;
         this.siteUrl = siteUrl.endsWith("/") ? siteUrl.substring(0, siteUrl.length() - 1) : siteUrl;
         this.minJobs = minJobs;
         this.maxJobs = maxJobs;
@@ -138,23 +141,44 @@ public class DigestSender {
         // Recorded before the first send. A crash halfway through costs the rest
         // of this issue; recording afterwards would re-send the whole thing to
         // everyone who already had it.
-        db.sql("""
+        Long issueId = db.sql("""
                         insert into newsletter_issues (covers_from, job_count, recipients)
                         values (:since, :jobs, :recipients)
+                        returning id
                         """)
                 .param("since", Timestamp.from(since))
                 .param("jobs", roles.size())
                 .param("recipients", audience.size())
-                .update();
+                .query(Long.class)
+                .single();
 
+        int sent = 0;
         for (SubscriberRepository.Recipient person : audience) {
+            if (!budget.claim(MailBudget.Tier.TRANSACTIONAL)) {
+                log.warn("digest truncated: the day's whole mail budget is spent after {} of {}",
+                        sent, audience.size());
+                break;
+            }
             subscribers.markDigestSent(person.id());
             mailer.send(person.email(), subject(roles.size()),
                     body(roles, person), html(roles, person));
+            sent++;
         }
 
-        log.info("digest sent: {} roles to {} recipients", roles.size(), audience.size());
-        return audience.size();
+        // The row was written with the intended size, because it has to exist
+        // before the first send. If the budget cut the issue short it is
+        // corrected here: the number in this table is read as "how many people
+        // got it", and an issue that reports more readers than it had is a
+        // quiet lie in the one place the list's health is judged from.
+        if (sent != audience.size()) {
+            db.sql("update newsletter_issues set recipients = :sent where id = :id")
+                    .param("sent", sent)
+                    .param("id", issueId)
+                    .update();
+        }
+
+        log.info("digest sent: {} roles to {} recipients", roles.size(), sent);
+        return sent;
     }
 
     /** When the last issue went out, or a week ago if there has never been one. */

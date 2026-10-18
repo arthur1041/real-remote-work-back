@@ -72,6 +72,7 @@ public class InviteSender {
     private final JdbcClient db;
     private final SubscriberRepository subscribers;
     private final Mailer mailer;
+    private final MailBudget budget;
     private final String siteUrl;
     private final int batchSize;
 
@@ -79,11 +80,13 @@ public class InviteSender {
             JdbcClient db,
             SubscriberRepository subscribers,
             Mailer mailer,
+            MailBudget budget,
             @Value("${newsletter.site-url}") String siteUrl,
             @Value("${newsletter.invite.batch-size:25}") int batchSize) {
         this.db = db;
         this.subscribers = subscribers;
         this.mailer = mailer;
+        this.budget = budget;
         this.siteUrl = siteUrl.endsWith("/") ? siteUrl.substring(0, siteUrl.length() - 1) : siteUrl;
         this.batchSize = batchSize;
     }
@@ -117,6 +120,14 @@ public class InviteSender {
 
         int sent = 0;
         for (SubscriberRepository.Lead lead : batch) {
+            // Before the stamp, so a refusal costs nothing. This is the whole
+            // difference between knowing the daily limit and discovering it:
+            // the lead stays queued and goes out tomorrow, rather than being
+            // marked as written to by an attempt that never left.
+            if (!budget.claim(MailBudget.Tier.COLD)) {
+                log.info("invitations held: today's cold-mail budget is spent, {} sent this run", sent);
+                break;
+            }
             subscribers.markInvited(lead.id());
             boolean accepted = mailer.send(lead.email(), subject(board),
                     body(lead, board, sample), html(lead, board, sample));

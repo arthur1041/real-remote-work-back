@@ -28,16 +28,19 @@ public class ReviewAlerter {
 
     private final JdbcClient db;
     private final Mailer mailer;
+    private final MailBudget budget;
     private final String alertTo;
     private final String siteUrl;
 
     public ReviewAlerter(
             JdbcClient db,
             Mailer mailer,
+            MailBudget budget,
             @Value("${newsletter.review-alert-to:}") String alertTo,
             @Value("${newsletter.site-url}") String siteUrl) {
         this.db = db;
         this.mailer = mailer;
+        this.budget = budget;
         this.alertTo = alertTo == null ? "" : alertTo.trim();
         this.siteUrl = siteUrl.endsWith("/") ? siteUrl.substring(0, siteUrl.length() - 1) : siteUrl;
     }
@@ -77,17 +80,28 @@ public class ReviewAlerter {
             return 0;
         }
 
+        int sent = 0;
         for (Waiting row : waiting) {
+            if (!budget.claim(MailBudget.Tier.TRANSACTIONAL)) {
+                // The submission stays unstamped and is announced tomorrow. An
+                // employer waiting on a review is the promise this alert exists
+                // to keep, so losing one silently is worse than announcing late.
+                log.warn("review alert held: the day's whole mail budget is spent");
+                break;
+            }
             // Stamped first, as everywhere else here: one missed alert beats a
             // loop that mails the same submission every minute.
             db.sql("update employer_postings set review_notified_at = now() where id = :id")
                     .param("id", row.id())
                     .update();
             mailer.send(alertTo, subject(row), body(row), html(row));
+            sent++;
         }
 
-        log.info("review alerts sent: {}", waiting.size());
-        return waiting.size();
+        if (sent > 0) {
+            log.info("review alerts sent: {}", sent);
+        }
+        return sent;
     }
 
     private String subject(Waiting row) {

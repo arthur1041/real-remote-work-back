@@ -131,6 +131,12 @@ public class AdminController {
     /**
      * Mails the templates to one address, for looking at.
      *
+     * <p>Previews are not budgeted. They are an operator action, a handful a
+     * day at most, and a budget that refused one would block the person trying
+     * to find out why mail looks wrong. The day's counter therefore runs very
+     * slightly behind what the relay has actually seen, which is the right
+     * direction for it to be wrong in only because the reserve absorbs it.
+     *
      * <p>{@code only} names a single template. Without it all four go, which is
      * right the first time and wrong every time after: one template changes, four
      * arrive, and the three that did not change are the ones being compared

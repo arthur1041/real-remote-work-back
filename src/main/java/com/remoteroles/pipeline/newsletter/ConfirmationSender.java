@@ -37,16 +37,19 @@ public class ConfirmationSender {
 
     private final SubscriberRepository subscribers;
     private final Mailer mailer;
+    private final MailBudget budget;
     private final String siteUrl;
     private final int batchSize;
 
     public ConfirmationSender(
             SubscriberRepository subscribers,
             Mailer mailer,
+            MailBudget budget,
             @Value("${newsletter.site-url}") String siteUrl,
             @Value("${newsletter.confirmation.batch-size:20}") int batchSize) {
         this.subscribers = subscribers;
         this.mailer = mailer;
+        this.budget = budget;
         this.siteUrl = siteUrl.endsWith("/") ? siteUrl.substring(0, siteUrl.length() - 1) : siteUrl;
         this.batchSize = batchSize;
     }
@@ -69,6 +72,14 @@ public class ConfirmationSender {
 
         int sent = 0;
         for (SubscriberRepository.Awaiting row : batch) {
+            // Transactional, so this may spend the reserve that cold mail is
+            // kept away from. Reaching this at all means the whole day's budget
+            // is gone, which is worth a warning rather than a note: somebody is
+            // at a form waiting for this link, and they are not getting it.
+            if (!budget.claim(MailBudget.Tier.TRANSACTIONAL)) {
+                log.warn("confirmation held: the day's whole mail budget is spent, {} sent this run", sent);
+                break;
+            }
             // Stamped first. See markConfirmationSent.
             subscribers.markConfirmationSent(row.id());
             mailer.send(row.email(), SUBJECT, body(row), html(row));
