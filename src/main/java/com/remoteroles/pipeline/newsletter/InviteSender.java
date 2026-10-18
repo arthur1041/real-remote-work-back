@@ -2,6 +2,8 @@ package com.remoteroles.pipeline.newsletter;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.text.NumberFormat;
 import java.util.List;
 import java.util.Locale;
@@ -33,10 +35,17 @@ import org.springframework.stereotype.Service;
  * nudge is fair; a third would be a campaign, and the person who ignored two has
  * answered twice.
  *
- * <p>Sent in small batches. A burst of mail from a domain with no sending
- * history is the pattern filters are built to catch, and this domain also
- * carries confirmation mail and the employer review alerts — so a reputation
- * spent here is taken from the product's own operations.
+ * <p>Sent in small batches, often. The pacing is not caution for its own sake:
+ * a burst of mail from a domain with little sending history is the pattern
+ * filters are built to catch, and this domain also carries confirmation mail
+ * and the employer review alerts — so a reputation spent here is taken from the
+ * product's own operations.
+ *
+ * <p>What matters is the shape, not only the rate. Twenty-five messages in one
+ * second each hour and five every two minutes come to roughly the same volume,
+ * but the first is a burst with a flat silence after it and the second is a
+ * trickle. The trickle is both the safer pattern and the faster drain, which is
+ * why the batch is small and the schedule is frequent rather than the reverse.
  */
 @Service
 @ConditionalOnProperty(name = "newsletter.invite.enabled", havingValue = "true", matchIfMissing = true)
@@ -44,6 +53,21 @@ public class InviteSender {
 
     private static final Logger log = LoggerFactory.getLogger(InviteSender.class);
     private static final int SAMPLE_SIZE = 4;
+
+    /**
+     * How long the queue stops after the relay refuses a message.
+     *
+     * <p>A synchronous refusal here is hardly ever about the address — the relay
+     * accepts those and bounces them later. It is a daily quota, a revoked key,
+     * an outage. Without a pause the scheduler would wake every couple of
+     * minutes and feed another lead into the same wall, and because a lead is
+     * stamped before the attempt, each one it burns is a person who will never
+     * be written to again.
+     */
+    private static final Duration PAUSE_AFTER_FAILURE = Duration.ofMinutes(30);
+
+    /** Set when a send is refused; nothing is attempted until it passes. */
+    private volatile Instant pausedUntil = Instant.EPOCH;
 
     private final JdbcClient db;
     private final SubscriberRepository subscribers;
@@ -76,7 +100,7 @@ public class InviteSender {
 
     /** Returns how many invitations were sent. */
     public int sendPending() {
-        if (!mailer.isDeliveryEnabled()) {
+        if (!mailer.isDeliveryEnabled() || Instant.now().isBefore(pausedUntil)) {
             return 0;
         }
 
@@ -91,14 +115,29 @@ public class InviteSender {
         Board board = board();
         List<Role> sample = sample();
 
+        int sent = 0;
         for (SubscriberRepository.Lead lead : batch) {
             subscribers.markInvited(lead.id());
-            mailer.send(lead.email(), subject(board),
+            boolean accepted = mailer.send(lead.email(), subject(board),
                     body(lead, board, sample), html(lead, board, sample));
+            if (!accepted) {
+                // Stop on the first refusal rather than working through the
+                // rest. The stamp on this one lead stands -- recovering it
+                // would mean retrying an address that may be the problem, in a
+                // loop -- but it is the only one lost, instead of everything
+                // still queued behind it.
+                pausedUntil = Instant.now().plus(PAUSE_AFTER_FAILURE);
+                log.warn("invitations paused for {} after a refused send; {} sent this run",
+                        PAUSE_AFTER_FAILURE, sent);
+                break;
+            }
+            sent++;
         }
 
-        log.info("invitations sent: {}", batch.size());
-        return batch.size();
+        if (sent > 0) {
+            log.info("invitations sent: {}", sent);
+        }
+        return sent;
     }
 
     /** What the board currently holds, as the invitation quotes it. */

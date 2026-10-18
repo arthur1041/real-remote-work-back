@@ -22,13 +22,21 @@ public interface Mailer {
      * part that is a stub saying "view this in a browser" is the pattern being
      * guarded against, not a way around it.
      *
+     * <p>Returns whether the provider accepted it. Most callers ignore that:
+     * they are working through a batch, and one address the relay refuses must
+     * not abort the rest. The caller that does care is the one sending cold
+     * mail, where a refusal is almost never about the address -- it is a quota,
+     * an expired key, a relay that is down -- and continuing would spend the
+     * whole queue on a wall.
+     *
      * @param html may be null, for mail that is genuinely text
+     * @return true when the provider accepted the message
      */
-    void send(String to, String subject, String text, String html);
+    boolean send(String to, String subject, String text, String html);
 
     /** Text only. */
-    default void send(String to, String subject, String text) {
-        send(to, subject, text, null);
+    default boolean send(String to, String subject, String text) {
+        return send(to, subject, text, null);
     }
 
     /**

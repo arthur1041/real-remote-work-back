@@ -53,7 +53,7 @@ public class SmtpMailer implements Mailer {
      * text.
      */
     @Override
-    public void send(String to, String subject, String text, String html) {
+    public boolean send(String to, String subject, String text, String html) {
         try {
             MimeMessage message = sender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, html != null, "UTF-8");
@@ -67,9 +67,11 @@ public class SmtpMailer implements Mailer {
             }
             sender.send(message);
             log.info("mail sent: to={} subject=\"{}\"", LoggingMailer.redact(to), subject);
+            return true;
         } catch (Exception e) {
             log.warn("mail failed: to={} subject=\"{}\" error={}",
                     LoggingMailer.redact(to), subject, e.getMessage());
+            return false;
         }
     }
 

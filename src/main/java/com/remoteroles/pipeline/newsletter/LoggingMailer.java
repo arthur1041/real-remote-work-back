@@ -22,12 +22,17 @@ public class LoggingMailer implements Mailer {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingMailer.class);
 
+    // True, although nothing was sent. The return value reports whether the
+    // provider refused, and there is no provider; a false here would read as an
+    // outage to callers that back off on failure, and stall a queue in exactly
+    // the configuration where nothing can go wrong.
     @Override
-    public void send(String to, String subject, String text, String html) {
+    public boolean send(String to, String subject, String text, String html) {
         log.info("mail NOT sent (delivery disabled): to={} subject=\"{}\" textChars={} htmlChars={}",
                 redact(to), subject,
                 text == null ? 0 : text.length(),
                 html == null ? 0 : html.length());
+        return true;
     }
 
     @Override

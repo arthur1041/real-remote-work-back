@@ -95,13 +95,18 @@ newsletter:
     min-jobs: ${NEWSLETTER_DIGEST_MIN_JOBS:5}
     max-jobs: ${NEWSLETTER_DIGEST_MAX_JOBS:15}
 
-  # The single invitation sent to a recorded lead. Small batches: a burst of
-  # cold mail from a domain with little sending history is what gets a domain
-  # filtered, and this one also carries confirmations and review alerts.
+  # The single invitation sent to a recorded lead.
+  #
+  # Five every two minutes: 150 an hour, with no burst bigger than five. The
+  # earlier shape sent the same kind of volume as one batch of 25 on the hour,
+  # which is both slower to drain an import and a worse pattern to present to a
+  # filter -- a spike and then nothing looks like a campaign, a trickle looks
+  # like a product. Raise the batch before the frequency if more is needed: the
+  # burst size is the part a relay reacts to.
   invite:
     enabled: ${NEWSLETTER_INVITE_ENABLED:true}
-    cron: ${NEWSLETTER_INVITE_CRON:0 10 * * * *}
-    batch-size: ${NEWSLETTER_INVITE_BATCH:25}
+    cron: ${NEWSLETTER_INVITE_CRON:0 */2 * * * *}
+    batch-size: ${NEWSLETTER_INVITE_BATCH:5}
 
   confirmation:
     enabled: ${NEWSLETTER_CONFIRMATION_ENABLED:true}
