@@ -54,6 +54,46 @@ public class SubscriberRepository {
                 .list();
     }
 
+    /** A lead that has been recorded but not yet contacted. */
+    public record Lead(long id, String email, String confirmToken, String unsubscribeToken) {}
+
+    /**
+     * Leads whose single invitation has not gone out yet.
+     *
+     * <p>Oldest first, and capped by the caller. A list of cold addresses is
+     * exactly the shape that gets a new sending domain filtered, so these go out
+     * in small batches rather than all at once.
+     */
+    public List<Lead> awaitingInvite(int limit) {
+        return db.sql("""
+                        select id, email, confirm_token, unsubscribe_token
+                        from subscribers
+                        where status = 'INVITED' and invited_at is null
+                        order by created_at
+                        limit :limit
+                        """)
+                .param("limit", limit)
+                .query((rs, n) -> new Lead(
+                        rs.getLong("id"),
+                        rs.getString("email"),
+                        rs.getString("confirm_token"),
+                        rs.getString("unsubscribe_token")))
+                .list();
+    }
+
+    /**
+     * Records that the one invitation has been sent.
+     *
+     * <p>Stamped before the send, like every other mail stamp here. There is no
+     * second invitation by design, so the failure that matters is sending twice,
+     * not failing to send once.
+     */
+    public void markInvited(long id) {
+        db.sql("update subscribers set invited_at = now() where id = :id")
+                .param("id", id)
+                .update();
+    }
+
     /** One address waiting to be asked whether it really wants this. */
     public record Awaiting(long id, String email, String confirmToken, String unsubscribeToken) {}
 
@@ -94,9 +134,12 @@ public class SubscriberRepository {
      * a blocked sending domain.
      */
     public List<Recipient> digestAudience(String audience, int limit) {
-        // UNSUBSCRIBED and BLOCKED are excluded under either setting, and that is
-        // not configurable. Opting out has to stick, and an address blocked by
-        // hand was blocked for a reason that widening the audience does not undo.
+        // UNSUBSCRIBED, BLOCKED and INVITED are excluded under either setting, and
+        // that is not configurable. Opting out has to stick; an address blocked
+        // by hand was blocked for a reason that widening the audience does not
+        // undo; and an INVITED address was contacted once without asking, so
+        // letting "everyone" reach it would turn one invitation into the
+        // subscription the invitation exists to ask about.
         String statuses = "ALL".equals(audience)
                 ? "('PENDING', 'CONFIRMED')"
                 : "('CONFIRMED')";

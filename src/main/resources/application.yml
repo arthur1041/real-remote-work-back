@@ -95,6 +95,14 @@ newsletter:
     min-jobs: ${NEWSLETTER_DIGEST_MIN_JOBS:5}
     max-jobs: ${NEWSLETTER_DIGEST_MAX_JOBS:15}
 
+  # The single invitation sent to a recorded lead. Small batches: a burst of
+  # cold mail from a domain with little sending history is what gets a domain
+  # filtered, and this one also carries confirmations and review alerts.
+  invite:
+    enabled: ${NEWSLETTER_INVITE_ENABLED:true}
+    cron: ${NEWSLETTER_INVITE_CRON:0 10 * * * *}
+    batch-size: ${NEWSLETTER_INVITE_BATCH:25}
+
   confirmation:
     enabled: ${NEWSLETTER_CONFIRMATION_ENABLED:true}
     cron: ${NEWSLETTER_CONFIRMATION_CRON:0 * * * * *}
