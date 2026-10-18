@@ -303,6 +303,23 @@ final class EmailLayout {
      * they report instead.
      */
     static String footer(String siteUrl, String unsubscribeUrl, String reason) {
+        return footer(siteUrl, unsubscribeUrl, "Unsubscribe", reason);
+    }
+
+    /**
+     * The same footer, with the opt-out called something other than "Unsubscribe".
+     *
+     * <p>The invitation goes to an address that is on no list. Offering to end a
+     * subscription that was never started is the one line in that message that
+     * contradicts the rest of it: everything above the footer is an offer to
+     * join, and the footer says the reader is already in.
+     *
+     * <p>What changes is the label, not the mechanism. The link still has to be
+     * there — a reminder is scheduled a month out, and somebody who wants it
+     * stopped needs a way to say so that is not the spam button, which costs the
+     * domain reputation that the confirmation and review mail also spends.
+     */
+    static String footer(String siteUrl, String optOutUrl, String optOutLabel, String reason) {
         StringBuilder out = new StringBuilder();
         if (reason != null && !reason.isBlank()) {
             out.append("""
@@ -315,12 +332,12 @@ final class EmailLayout {
                   &nbsp;·&nbsp; Remote roles with no country requirement.
                 </p>
                 """.formatted(escape(siteUrl), BRAND_DEEP));
-        if (unsubscribeUrl != null && !unsubscribeUrl.isBlank()) {
+        if (optOutUrl != null && !optOutUrl.isBlank()) {
             out.append("""
                     <p style="margin:0;">
-                      <a href="%s" style="color:%s;text-decoration:underline;">Unsubscribe</a>
+                      <a href="%s" style="color:%s;text-decoration:underline;">%s</a>
                     </p>
-                    """.formatted(escape(unsubscribeUrl), MUTED));
+                    """.formatted(escape(optOutUrl), MUTED, escape(optOutLabel)));
         }
         return out.toString();
     }

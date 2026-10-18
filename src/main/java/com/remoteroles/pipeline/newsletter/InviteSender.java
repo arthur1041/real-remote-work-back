@@ -251,7 +251,8 @@ public class InviteSender {
                 — Actually Remote
                 %s
 
-                Prefer not to receive these? Opt out permanently: %s
+                Prefer not to hear from us? Opt out here and we will not \
+                write again: %s
                 """.formatted(siteUrl, confirm, siteUrl, unsubscribe));
 
         return out.toString();
@@ -323,7 +324,11 @@ public class InviteSender {
                                 .formatted(count(board.roles()), count(board.employers()))
                         : "Remote roles with no country requirement.",
                 card.toString(),
-                EmailLayout.footer(siteUrl, unsubscribe, null));
+                // Not "Unsubscribe": this reader is on no list, and a footer
+                // offering to end a subscription contradicts the invitation
+                // above it. The link is the same one -- what it stops is the
+                // reminder, not a newsletter nobody signed up for.
+                EmailLayout.footer(siteUrl, unsubscribe, "Don\u2019t email me again", null));
     }
 
     /**

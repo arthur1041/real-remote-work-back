@@ -128,28 +128,53 @@ public class AdminController {
      * reconsider if that ever changes: an open endpoint that mails arbitrary
      * recipients is an open relay with extra steps.
      */
+    /**
+     * Mails the templates to one address, for looking at.
+     *
+     * <p>{@code only} names a single template. Without it all four go, which is
+     * right the first time and wrong every time after: one template changes, four
+     * arrive, and the three that did not change are the ones being compared
+     * against a memory of yesterday.
+     */
     @PostMapping("/newsletter/preview")
-    public Map<String, String> previewTemplates(@RequestParam("to") String to) {
+    public Map<String, String> previewTemplates(
+            @RequestParam("to") String to,
+            @RequestParam(value = "only", required = false) String only) {
         java.util.Map<String, String> result = new java.util.LinkedHashMap<>();
 
-        ConfirmationSender confirmation = confirmations.getIfAvailable();
-        if (confirmation == null) {
-            result.put("confirmation", "skipped: newsletter.confirmation.enabled is false");
-        } else {
-            confirmation.sendPreview(to);
-            result.put("confirmation", "sent");
+        if (wanted(only, "confirmation")) {
+            ConfirmationSender confirmation = confirmations.getIfAvailable();
+            if (confirmation == null) {
+                result.put("confirmation", "skipped: newsletter.confirmation.enabled is false");
+            } else {
+                confirmation.sendPreview(to);
+                result.put("confirmation", "sent");
+            }
         }
 
-        invites.sendPreview(to);
-        result.put("invite", "sent");
+        if (wanted(only, "invite")) {
+            invites.sendPreview(to);
+            result.put("invite", "sent");
+        }
 
-        digest.sendPreview(to);
-        result.put("digest", "sent");
+        if (wanted(only, "digest")) {
+            digest.sendPreview(to);
+            result.put("digest", "sent");
+        }
 
-        reviews.sendPreview(to);
-        result.put("reviewAlert", "sent");
+        if (wanted(only, "reviewAlert")) {
+            reviews.sendPreview(to);
+            result.put("reviewAlert", "sent");
+        }
 
+        if (result.isEmpty()) {
+            result.put("error", "unknown template: " + only);
+        }
         return result;
+    }
+
+    private static boolean wanted(String only, String name) {
+        return only == null || only.isBlank() || only.equalsIgnoreCase(name);
     }
 
     @PostMapping("/retire/non-roles")
