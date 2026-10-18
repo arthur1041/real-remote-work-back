@@ -20,8 +20,10 @@ import org.springframework.stereotype.Service;
  * would be a lie in the first sentence — which is both dishonest and the
  * quickest way to be reported.
  *
- * <p>One invitation, ever. Somebody who ignores it has answered it, and asking
- * again is how an invitation turns into a nuisance. Nothing follows up.
+ * <p>Two at most: the original and one reminder, and the reminder only after a
+ * month and only to somebody who never responded. Mail gets missed, so one
+ * nudge is fair; a third would be a campaign, and the person who ignored two
+ * has answered twice.
  *
  * <p>Sent in small batches. A burst of cold mail from a domain with no sending
  * history is the pattern filters are built to catch, and this domain also
@@ -54,6 +56,11 @@ public class InviteSender {
     @Scheduled(cron = "${newsletter.invite.cron:0 10 * * * *}")
     public void run() {
         sendPending();
+    }
+
+    /** Sends whatever is due right now, for the admin to call after an import. */
+    public int sendDueNow() {
+        return sendPending();
     }
 
     /** Returns how many invitations were sent. */

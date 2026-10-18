@@ -65,11 +65,22 @@ public class SubscriberRepository {
      * in small batches rather than all at once.
      */
     public List<Lead> awaitingInvite(int limit) {
+        // Due means asked for and not yet satisfied: a request newer than the
+        // last send. Import and resend both set the request, so this one
+        // predicate covers the first invitation and the single reminder without
+        // either of them needing a flag to clear.
+        //
+        // The ceiling is here rather than only in the admin, because a cap that
+        // lives in a button is a cap until somebody calls the function another
+        // way.
         return db.sql("""
                         select id, email, confirm_token, unsubscribe_token
                         from subscribers
-                        where status = 'INVITED' and invited_at is null
-                        order by created_at
+                        where status = 'INVITED'
+                          and invite_count < 2
+                          and invite_requested_at is not null
+                          and (invited_at is null or invited_at < invite_requested_at)
+                        order by invite_requested_at
                         limit :limit
                         """)
                 .param("limit", limit)
@@ -89,7 +100,11 @@ public class SubscriberRepository {
      * not failing to send once.
      */
     public void markInvited(long id) {
-        db.sql("update subscribers set invited_at = now() where id = :id")
+        db.sql("""
+                        update subscribers
+                           set invited_at = now(), invite_count = invite_count + 1
+                         where id = :id
+                        """)
                 .param("id", id)
                 .update();
     }

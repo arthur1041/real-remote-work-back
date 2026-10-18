@@ -6,6 +6,7 @@ import com.remoteroles.pipeline.repo.JobRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import com.remoteroles.pipeline.newsletter.DigestSender;
+import com.remoteroles.pipeline.newsletter.InviteSender;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -26,16 +27,18 @@ import java.util.Map;
 public class AdminController {
 
     private final DigestSender digest;
+    private final InviteSender invites;
     private final IngestionService ingestion;
     private final JobRepository jobs;
     private final ScopeRechecker rechecker;
 
-    public AdminController(DigestSender digest, IngestionService ingestion, JobRepository jobs,
+    public AdminController(DigestSender digest, InviteSender invites, IngestionService ingestion, JobRepository jobs,
                            ScopeRechecker rechecker) {
         this.ingestion = ingestion;
         this.jobs = jobs;
         this.rechecker = rechecker;
         this.digest = digest;
+        this.invites = invites;
     }
 
     @GetMapping("/health")
@@ -84,6 +87,19 @@ public class AdminController {
     @PostMapping("/newsletter/send")
     public Map<String, Integer> sendDigestNow() {
         return Map.of("recipients", digest.sendIssueNow());
+    }
+
+    /**
+     * Sends any invitation that is due, immediately.
+     *
+     * <p>Called by the admin right after addresses are recorded, so the person
+     * importing sees the result rather than waiting for the next hourly run.
+     * Every rule still applies: the two-send ceiling, the status check, and
+     * whether a send was actually requested.
+     */
+    @PostMapping("/newsletter/invite")
+    public Map<String, Integer> sendInvitesNow() {
+        return Map.of("sent", invites.sendDueNow());
     }
 
     @PostMapping("/retire/non-roles")
