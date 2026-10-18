@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import com.remoteroles.pipeline.newsletter.ConfirmationSender;
 import com.remoteroles.pipeline.newsletter.DigestSender;
 import com.remoteroles.pipeline.newsletter.InviteSender;
+import com.remoteroles.pipeline.newsletter.MailBudget;
 import com.remoteroles.pipeline.newsletter.ReviewAlerter;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -37,14 +38,17 @@ public class AdminController {
     // ObjectProvider is the difference between a preview that reports one
     // template missing and a service that refuses to start.
     private final ObjectProvider<ConfirmationSender> confirmations;
+    private final MailBudget budget;
     private final IngestionService ingestion;
     private final JobRepository jobs;
     private final ScopeRechecker rechecker;
 
     public AdminController(DigestSender digest, InviteSender invites, ReviewAlerter reviews,
                            ObjectProvider<ConfirmationSender> confirmations,
+                           MailBudget budget,
                            IngestionService ingestion, JobRepository jobs,
                            ScopeRechecker rechecker) {
+        this.budget = budget;
         this.ingestion = ingestion;
         this.jobs = jobs;
         this.rechecker = rechecker;
@@ -131,11 +135,11 @@ public class AdminController {
     /**
      * Mails the templates to one address, for looking at.
      *
-     * <p>Previews are not budgeted. They are an operator action, a handful a
-     * day at most, and a budget that refused one would block the person trying
-     * to find out why mail looks wrong. The day's counter therefore runs very
-     * slightly behind what the relay has actually seen, which is the right
-     * direction for it to be wrong in only because the reserve absorbs it.
+     * <p>A preview is counted against the day but never refused by it. It is an
+     * operator action, and a budget that blocked the person trying to find out
+     * why mail looks wrong would be in the way at the worst moment; but the
+     * relay counts these like any other message, so leaving them out would make
+     * the day's total quietly wrong in the direction that matters.
      *
      * <p>{@code only} names a single template. Without it all four go, which is
      * right the first time and wrong every time after: one template changes, four
@@ -154,22 +158,26 @@ public class AdminController {
                 result.put("confirmation", "skipped: newsletter.confirmation.enabled is false");
             } else {
                 confirmation.sendPreview(to);
-                result.put("confirmation", "sent");
+                budget.record(MailBudget.Tier.TRANSACTIONAL);
+            result.put("confirmation", "sent");
             }
         }
 
         if (wanted(only, "invite")) {
             invites.sendPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
             result.put("invite", "sent");
         }
 
         if (wanted(only, "digest")) {
             digest.sendPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
             result.put("digest", "sent");
         }
 
         if (wanted(only, "reviewAlert")) {
             reviews.sendPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
             result.put("reviewAlert", "sent");
         }
 

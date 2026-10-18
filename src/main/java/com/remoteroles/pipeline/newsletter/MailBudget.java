@@ -3,7 +3,10 @@ package com.remoteroles.pipeline.newsletter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
@@ -124,6 +127,68 @@ public class MailBudget {
                 .query(Integer.class)
                 .optional()
                 .isPresent();
+    }
+
+    /**
+     * Counts a message that was sent regardless of the budget.
+     *
+     * <p>For the one kind there is: a template preview, which an operator asks
+     * for by hand. Refusing it would block the person trying to find out why
+     * mail looks wrong, at the moment they most need to look -- but leaving it
+     * uncounted is worse than it sounds. The counter's only job is to mirror
+     * what the relay has seen, and a counter that runs behind puts the system
+     * back to discovering the limit by being refused, which is the thing this
+     * class exists to prevent. It is especially wrong when the budget is set to
+     * the provider's real ceiling rather than a cautious number under it.
+     *
+     * <p>So the slot is taken either way, and the ceiling is simply not
+     * consulted. If previews push the day past its cap, the next claim is
+     * refused — which is correct, because by then the relay is counting the
+     * same messages.
+     */
+    public void record(Tier tier) {
+        int cold = tier == Tier.COLD ? 1 : 0;
+        db.sql("""
+                        insert into mail_budget (day, sent, cold, daily_limit, cold_limit)
+                        values (current_date, 1, :cold, :daily, :coldLimit)
+                        on conflict (day) do update
+                           set sent = mail_budget.sent + 1,
+                               cold = mail_budget.cold + :cold,
+                               daily_limit = excluded.daily_limit,
+                               cold_limit = excluded.cold_limit
+                        """)
+                .param("cold", cold)
+                .param("daily", daily)
+                .param("coldLimit", coldCeiling())
+                .update();
+    }
+
+    /**
+     * Makes sure today's row exists, with the limits currently configured.
+     *
+     * <p>Without this the row appears only when the first message is claimed,
+     * and until then the admin screen has no limits to show -- it cannot even
+     * say "0 of 300", because it deliberately does not keep its own copy of
+     * these numbers. A quiet morning would render as an absence, which is
+     * indistinguishable on screen from the budget not working.
+     *
+     * <p>It also refreshes the limits on an already-written row, so changing
+     * the configuration and restarting is visible immediately rather than at
+     * the next send.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    @Scheduled(cron = "${newsletter.budget.open-day-cron:0 1 0 * * *}")
+    public void openToday() {
+        db.sql("""
+                        insert into mail_budget (day, sent, cold, daily_limit, cold_limit)
+                        values (current_date, 0, 0, :daily, :coldLimit)
+                        on conflict (day) do update
+                           set daily_limit = excluded.daily_limit,
+                               cold_limit = excluded.cold_limit
+                        """)
+                .param("daily", daily)
+                .param("coldLimit", coldCeiling())
+                .update();
     }
 
     /** What has been spent today. Both counts are zero before the first send. */
