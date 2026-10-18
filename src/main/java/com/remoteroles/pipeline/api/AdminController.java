@@ -5,8 +5,12 @@ import com.remoteroles.pipeline.normalize.ScopeRechecker;
 import com.remoteroles.pipeline.repo.JobRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import com.remoteroles.pipeline.newsletter.ConfirmationSender;
 import com.remoteroles.pipeline.newsletter.DigestSender;
 import com.remoteroles.pipeline.newsletter.InviteSender;
+import com.remoteroles.pipeline.newsletter.ReviewAlerter;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,17 +32,26 @@ public class AdminController {
 
     private final DigestSender digest;
     private final InviteSender invites;
+    private final ReviewAlerter reviews;
+    // Conditional on its own switch, so it may genuinely be absent. An
+    // ObjectProvider is the difference between a preview that reports one
+    // template missing and a service that refuses to start.
+    private final ObjectProvider<ConfirmationSender> confirmations;
     private final IngestionService ingestion;
     private final JobRepository jobs;
     private final ScopeRechecker rechecker;
 
-    public AdminController(DigestSender digest, InviteSender invites, IngestionService ingestion, JobRepository jobs,
+    public AdminController(DigestSender digest, InviteSender invites, ReviewAlerter reviews,
+                           ObjectProvider<ConfirmationSender> confirmations,
+                           IngestionService ingestion, JobRepository jobs,
                            ScopeRechecker rechecker) {
         this.ingestion = ingestion;
         this.jobs = jobs;
         this.rechecker = rechecker;
         this.digest = digest;
         this.invites = invites;
+        this.reviews = reviews;
+        this.confirmations = confirmations;
     }
 
     @GetMapping("/health")
@@ -100,6 +113,43 @@ public class AdminController {
     @PostMapping("/newsletter/invite")
     public Map<String, Integer> sendInvitesNow() {
         return Map.of("sent", invites.sendDueNow());
+    }
+
+    /**
+     * Sends one copy of every template to a single address, for looking at.
+     *
+     * <p>There is no other way to see these. Each one is triggered by a real
+     * event — somebody subscribing, a week elapsing, an employer submitting — so
+     * reviewing a layout change otherwise means waiting for a stranger to act,
+     * or manufacturing the event in the database and undoing it afterwards.
+     *
+     * <p>Sends to whatever address is asked for, which is fine while this port is
+     * unreachable from outside the compose network and is the first thing to
+     * reconsider if that ever changes: an open endpoint that mails arbitrary
+     * recipients is an open relay with extra steps.
+     */
+    @PostMapping("/newsletter/preview")
+    public Map<String, String> previewTemplates(@RequestParam("to") String to) {
+        java.util.Map<String, String> result = new java.util.LinkedHashMap<>();
+
+        ConfirmationSender confirmation = confirmations.getIfAvailable();
+        if (confirmation == null) {
+            result.put("confirmation", "skipped: newsletter.confirmation.enabled is false");
+        } else {
+            confirmation.sendPreview(to);
+            result.put("confirmation", "sent");
+        }
+
+        invites.sendPreview(to);
+        result.put("invite", "sent");
+
+        digest.sendPreview(to);
+        result.put("digest", "sent");
+
+        reviews.sendPreview(to);
+        result.put("reviewAlert", "sent");
+
+        return result;
     }
 
     @PostMapping("/retire/non-roles")

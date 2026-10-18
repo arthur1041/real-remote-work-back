@@ -149,7 +149,8 @@ public class DigestSender {
 
         for (SubscriberRepository.Recipient person : audience) {
             subscribers.markDigestSent(person.id());
-            mailer.send(person.email(), subject(roles.size()), body(roles, person));
+            mailer.send(person.email(), subject(roles.size()),
+                    body(roles, person), html(roles, person));
         }
 
         log.info("digest sent: {} roles to {} recipients", roles.size(), audience.size());
@@ -225,5 +226,58 @@ public class DigestSender {
 
                 %s
                 """.formatted(roles.size(), list.toString().stripTrailing() + "\n", siteUrl, unsubscribe);
+    }
+
+    /** The laid-out half: one row per role, the row itself being the link. */
+    private String html(List<Role> roles, SubscriberRepository.Recipient person) {
+        String unsubscribe = "%s/unsubscribe?token=%s"
+                .formatted(siteUrl, URLEncoder.encode(person.unsubscribeToken(), StandardCharsets.UTF_8));
+
+        StringBuilder rows = new StringBuilder();
+        for (int i = 0; i < roles.size(); i++) {
+            Role role = roles.get(i);
+            rows.append(EmailLayout.roleRow(
+                    role.title(),
+                    role.company(),
+                    "%s/jobs/%d".formatted(siteUrl, role.id()),
+                    i == roles.size() - 1));
+        }
+
+        String card = EmailLayout.eyebrow("This week")
+                + EmailLayout.heading("%d new roles open worldwide".formatted(roles.size()))
+                + EmailLayout.paragraph(
+                        "No country restriction at all &mdash; open to anyone, anywhere, as "
+                                + "stated by the employer rather than guessed at from the word "
+                                + "&ldquo;remote&rdquo;.",
+                        true)
+                + EmailLayout.roleList(rows.toString())
+                + EmailLayout.button(siteUrl, "See everything open worldwide");
+
+        return EmailLayout.document(
+                "%d roles went up this week, open to anyone anywhere.".formatted(roles.size()),
+                card,
+                EmailLayout.footer(
+                        siteUrl,
+                        unsubscribe,
+                        "You are getting this because you asked to hear about worldwide roles."));
+    }
+
+    /**
+     * Sends this template to one address, for looking at.
+     *
+     * <p>Lives beside the template rather than in a separate preview service so
+     * that a change to the layout and the thing that renders it cannot drift
+     * apart. Real data where there is real data to use; the tokens are
+     * deliberately invalid, so a click on the button in a preview lands on an
+     * error page instead of confirming or unsubscribing somebody for real.
+     */
+    public void sendPreview(String to) {
+        // A year back and capped, so a preview has roles in it whatever the week
+        // happened to bring. The real issue uses the window since the last one.
+        List<Role> roles = newWorldwideRoles(Instant.now().minus(365, ChronoUnit.DAYS), 8);
+        SubscriberRepository.Recipient person =
+                new SubscriberRepository.Recipient(0, to, "preview-token");
+        mailer.send(to, "[preview] " + subject(roles.size()),
+                body(roles, person), html(roles, person));
     }
 }

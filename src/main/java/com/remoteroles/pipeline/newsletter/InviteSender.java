@@ -93,7 +93,8 @@ public class InviteSender {
 
         for (SubscriberRepository.Lead lead : batch) {
             subscribers.markInvited(lead.id());
-            mailer.send(lead.email(), subject(board), body(lead, board, sample));
+            mailer.send(lead.email(), subject(board),
+                    body(lead, board, sample), html(lead, board, sample));
         }
 
         log.info("invitations sent: {}", batch.size());
@@ -107,7 +108,7 @@ public class InviteSender {
         }
     }
 
-    record Role(String title, String company) {}
+    record Role(long id, String title, String company) {}
 
     /**
      * The same definition of "open worldwide" the board itself serves.
@@ -174,7 +175,7 @@ public class InviteSender {
                             join repeat_hirers r on r.company_id = w.company_id
                            where length(w.title) <= 70
                         )
-                        select ranked.title, c.name as company
+                        select ranked.id, ranked.title, c.name as company
                           from ranked
                           join companies c on c.id = ranked.company_id
                          where ranked.rn = 1
@@ -182,7 +183,8 @@ public class InviteSender {
                          limit :limit
                         """)
                 .param("limit", SAMPLE_SIZE)
-                .query((rs, n) -> new Role(rs.getString("title"), rs.getString("company")))
+                .query((rs, n) -> new Role(
+                        rs.getLong("id"), rs.getString("title"), rs.getString("company")))
                 .list();
     }
 
@@ -253,5 +255,92 @@ public class InviteSender {
                 """.formatted(siteUrl, confirm, siteUrl, unsubscribe));
 
         return out.toString();
+    }
+
+    /**
+     * The same message, laid out.
+     *
+     * <p>Shares nothing with {@link #body} except the facts, deliberately. A
+     * templating layer that produced both from one source would have to be
+     * written for the lowest common denominator, and the two halves want
+     * genuinely different things: the text part wants a URL on its own line, the
+     * HTML part wants the row to be the tap target.
+     */
+    private String html(SubscriberRepository.Lead lead, Board board, List<Role> sample) {
+        String confirm = "%s/confirm?token=%s"
+                .formatted(siteUrl, URLEncoder.encode(lead.confirmToken(), StandardCharsets.UTF_8));
+        String unsubscribe = "%s/unsubscribe?token=%s"
+                .formatted(siteUrl, URLEncoder.encode(lead.unsubscribeToken(), StandardCharsets.UTF_8));
+
+        StringBuilder card = new StringBuilder();
+        card.append(EmailLayout.heading("Remote jobs that do not ask where you live"));
+        card.append(EmailLayout.paragraph(
+                "Most jobs advertised as &ldquo;remote&rdquo; still require you to live in a "
+                        + "particular country. Actually Remote lists only the ones that do not.",
+                true));
+
+        if (board.isPresentable()) {
+            card.append(EmailLayout.stats(List.of(
+                    new String[] {count(board.roles()), "roles open worldwide"},
+                    new String[] {count(board.employers()), "companies hiring"})));
+            card.append(EmailLayout.paragraph(
+                    "No country requirement, no timezone band, no relocation."));
+        } else {
+            card.append(EmailLayout.paragraph(
+                    "Every role on the board is open worldwide &mdash; no country requirement, "
+                            + "no timezone band, no relocation."));
+        }
+
+        if (!sample.isEmpty()) {
+            card.append(EmailLayout.eyebrow("Recently added"));
+            StringBuilder rows = new StringBuilder();
+            for (int i = 0; i < sample.size(); i++) {
+                Role role = sample.get(i);
+                rows.append(EmailLayout.roleRow(
+                        role.title(),
+                        role.company(),
+                        "%s/jobs/%d".formatted(siteUrl, role.id()),
+                        i == sample.size() - 1));
+            }
+            card.append(EmailLayout.roleList(rows.toString()));
+        }
+
+        card.append(EmailLayout.textLink(
+                siteUrl,
+                board.isPresentable()
+                        ? "Browse all %s roles \u2192".formatted(count(board.roles()))
+                        : "Browse the board \u2192"));
+        card.append(EmailLayout.rule());
+        card.append(EmailLayout.paragraph(
+                "New roles are added every day. Get the week&rsquo;s worldwide openings by "
+                        + "email, free.",
+                true));
+        card.append(EmailLayout.button(confirm, "Get the weekly email"));
+
+        return EmailLayout.document(
+                board.isPresentable()
+                        ? "%s roles from %s companies, open to anyone anywhere."
+                                .formatted(count(board.roles()), count(board.employers()))
+                        : "Remote roles with no country requirement.",
+                card.toString(),
+                EmailLayout.footer(siteUrl, unsubscribe, null));
+    }
+
+    /**
+     * Sends this template to one address, for looking at.
+     *
+     * <p>Lives beside the template rather than in a separate preview service so
+     * that a change to the layout and the thing that renders it cannot drift
+     * apart. Real data where there is real data to use; the tokens are
+     * deliberately invalid, so a click on the button in a preview lands on an
+     * error page instead of confirming or unsubscribing somebody for real.
+     */
+    public void sendPreview(String to) {
+        SubscriberRepository.Lead lead =
+                new SubscriberRepository.Lead(0, to, "preview-token", "preview-token");
+        Board board = board();
+        List<Role> sample = sample();
+        mailer.send(to, "[preview] " + subject(board),
+                body(lead, board, sample), html(lead, board, sample));
     }
 }

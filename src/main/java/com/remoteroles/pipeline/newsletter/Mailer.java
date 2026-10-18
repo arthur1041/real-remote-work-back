@@ -12,7 +12,24 @@ package com.remoteroles.pipeline.newsletter;
  */
 public interface Mailer {
 
-    void send(String to, String subject, String body);
+    /**
+     * Sends one message as both plain text and HTML.
+     *
+     * <p>Both halves, always. The HTML is what the reader sees; the text part is
+     * what a plain-text client, a screen reader and a spam filter see, and a
+     * message that carries only the HTML half scores worse at the filter than
+     * the same message carrying both. They have to say the same thing — a text
+     * part that is a stub saying "view this in a browser" is the pattern being
+     * guarded against, not a way around it.
+     *
+     * @param html may be null, for mail that is genuinely text
+     */
+    void send(String to, String subject, String text, String html);
+
+    /** Text only. */
+    default void send(String to, String subject, String text) {
+        send(to, subject, text, null);
+    }
 
     /**
      * Whether anything would actually leave the building.

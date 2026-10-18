@@ -4,9 +4,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
+
+import jakarta.mail.internet.MimeMessage;
 
 /**
  * Real delivery, over SMTP.
@@ -42,14 +44,27 @@ public class SmtpMailer implements Mailer {
         this.fromName = fromName;
     }
 
+    /**
+     * multipart/alternative when there is HTML, a plain message when there is not.
+     *
+     * <p>The order matters and {@link MimeMessageHelper} gets it right: the text
+     * part is written first and the HTML second, because a client picks the last
+     * part it understands. Reversed, every modern client would show the plain
+     * text.
+     */
     @Override
-    public void send(String to, String subject, String body) {
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom(from());
-        message.setTo(to);
-        message.setSubject(subject);
-        message.setText(body);
+    public void send(String to, String subject, String text, String html) {
         try {
+            MimeMessage message = sender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, html != null, "UTF-8");
+            helper.setFrom(from());
+            helper.setTo(to);
+            helper.setSubject(subject);
+            if (html == null) {
+                helper.setText(text);
+            } else {
+                helper.setText(text == null ? "" : text, html);
+            }
             sender.send(message);
             log.info("mail sent: to={} subject=\"{}\"", LoggingMailer.redact(to), subject);
         } catch (Exception e) {

@@ -83,7 +83,7 @@ public class ReviewAlerter {
             db.sql("update employer_postings set review_notified_at = now() where id = :id")
                     .param("id", row.id())
                     .update();
-            mailer.send(alertTo, subject(row), body(row));
+            mailer.send(alertTo, subject(row), body(row), html(row));
         }
 
         log.info("review alerts sent: {}", waiting.size());
@@ -124,5 +124,63 @@ public class ReviewAlerter {
                 %s/admin/postings
                 """.formatted(
                 row.company(), row.title(), declared, row.applyUrl(), siteUrl);
+    }
+
+    /**
+     * The laid-out half.
+     *
+     * <p>Fields rather than prose, because this one is read while deciding
+     * something: the declared eligibility and the advert's own URL are the two
+     * values the decision turns on, so they are a table and not a sentence. No
+     * unsubscribe link — this goes to the operator, who cannot opt out of their
+     * own review queue.
+     */
+    private String html(Waiting row) {
+        String declared = "WORLDWIDE".equals(row.scope())
+                ? EmailLayout.badge("Worldwide") + " <span>no country requirement</span>"
+                : EmailLayout.escape("%s: %s".formatted(row.scope(), row.detail()));
+
+        String card = EmailLayout.eyebrow("Waiting for review")
+                + EmailLayout.heading(row.title())
+                + EmailLayout.paragraph(
+                        "Submitted by " + EmailLayout.escape(row.company()) + ".", true)
+                + EmailLayout.field("Declared", declared)
+                + EmailLayout.field("Applies at",
+                        "<a href=\"" + EmailLayout.escape(row.applyUrl())
+                                + "\" style=\"color:" + EmailLayout.BRAND_DEEP
+                                + ";text-decoration:none;word-break:break-all;\">"
+                                + EmailLayout.escape(row.applyUrl()) + "</a>")
+                + EmailLayout.rule()
+                + EmailLayout.paragraph(
+                        "The thing to check is whether the body of the advert agrees with the "
+                                + "eligibility declared above. Everything else on this board is "
+                                + "read out of a posting; this is the only place a person is "
+                                + "taking someone&rsquo;s word for it.")
+                + EmailLayout.button(siteUrl + "/admin/postings", "Open the review queue");
+
+        return EmailLayout.document(
+                "%s at %s is waiting for review.".formatted(row.title(), row.company()),
+                card,
+                EmailLayout.footer(siteUrl, null, null));
+    }
+
+    /**
+     * Sends this template to one address, for looking at.
+     *
+     * <p>Lives beside the template rather than in a separate preview service so
+     * that a change to the layout and the thing that renders it cannot drift
+     * apart. Real data where there is real data to use; the tokens are
+     * deliberately invalid, so a click on the button in a preview lands on an
+     * error page instead of confirming or unsubscribing somebody for real.
+     */
+    public void sendPreview(String to) {
+        Waiting row = new Waiting(
+                0,
+                "Senior Platform Engineer",
+                "Northwind Systems",
+                "WORLDWIDE",
+                "",
+                "https://northwind.example/careers/senior-platform-engineer");
+        mailer.send(to, "[preview] " + subject(row), body(row), html(row));
     }
 }

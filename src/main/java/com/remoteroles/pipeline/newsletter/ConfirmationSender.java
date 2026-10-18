@@ -71,7 +71,7 @@ public class ConfirmationSender {
         for (SubscriberRepository.Awaiting row : batch) {
             // Stamped first. See markConfirmationSent.
             subscribers.markConfirmationSent(row.id());
-            mailer.send(row.email(), SUBJECT, body(row));
+            mailer.send(row.email(), SUBJECT, body(row), html(row));
             sent++;
         }
         log.info("confirmation emails sent: {}", sent);
@@ -81,12 +81,13 @@ public class ConfirmationSender {
     private static final String SUBJECT = "Confirm your email for Actually Remote";
 
     /**
-     * Plain text, deliberately.
+     * The text half.
      *
-     * <p>A first message from an unknown domain that is one tracked image and a
-     * button is the shape spam filters are tuned against. It also has to make
-     * sense to someone who has forgotten signing up, so it says what the site is
-     * before it asks for anything.
+     * <p>It has to make sense to someone who has forgotten signing up, so it
+     * says what the site is before it asks for anything. No tracked images and
+     * no redirect links in either half: a first message from a domain with no
+     * sending history that is one image and one wrapped URL is the exact shape
+     * spam filters are tuned against.
      */
     private String body(SubscriberRepository.Awaiting row) {
         String confirm = "%s/confirm?token=%s".formatted(siteUrl, encode(row.confirmToken()));
@@ -101,9 +102,8 @@ public class ConfirmationSender {
 
                 %s
 
-                If that was not you, ignore this. We will not send anything unless \
-                the link above is clicked, and the address is removed on its own \
-                after a while.
+                If that was not you, ignore this. Nothing is sent unless the link \
+                above is clicked.
 
                 You can leave at any time:
 
@@ -116,5 +116,43 @@ public class ConfirmationSender {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    /** The laid-out half. One ask, one button, nothing competing with it. */
+    private String html(SubscriberRepository.Awaiting row) {
+        String confirm = "%s/confirm?token=%s".formatted(siteUrl, encode(row.confirmToken()));
+        String unsubscribe = "%s/unsubscribe?token=%s".formatted(siteUrl, encode(row.unsubscribeToken()));
+
+        String card = EmailLayout.heading("Confirm your email")
+                + EmailLayout.paragraph(
+                        "You asked to hear about new remote roles with no country requirement "
+                                + "&mdash; eligibility read from what the employer published, "
+                                + "never guessed at. One click and the weekly email starts.",
+                        true)
+                + EmailLayout.button(confirm, "Confirm my email")
+                + EmailLayout.rule()
+                + EmailLayout.paragraph(
+                        "If that was not you, ignore this. Nothing is sent unless the button "
+                                + "above is clicked.");
+
+        return EmailLayout.document(
+                "One click to start the weekly email.",
+                card,
+                EmailLayout.footer(siteUrl, unsubscribe, null));
+    }
+
+    /**
+     * Sends this template to one address, for looking at.
+     *
+     * <p>Lives beside the template rather than in a separate preview service so
+     * that a change to the layout and the thing that renders it cannot drift
+     * apart. Real data where there is real data to use; the tokens are
+     * deliberately invalid, so a click on the button in a preview lands on an
+     * error page instead of confirming or unsubscribing somebody for real.
+     */
+    public void sendPreview(String to) {
+        SubscriberRepository.Awaiting row =
+                new SubscriberRepository.Awaiting(0, to, "preview-token", "preview-token");
+        mailer.send(to, "[preview] " + SUBJECT, body(row), html(row));
     }
 }

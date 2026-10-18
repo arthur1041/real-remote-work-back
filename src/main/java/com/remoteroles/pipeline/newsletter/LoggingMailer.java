@@ -23,9 +23,11 @@ public class LoggingMailer implements Mailer {
     private static final Logger log = LoggerFactory.getLogger(LoggingMailer.class);
 
     @Override
-    public void send(String to, String subject, String body) {
-        log.info("mail NOT sent (delivery disabled): to={} subject=\"{}\" bodyChars={}",
-                redact(to), subject, body == null ? 0 : body.length());
+    public void send(String to, String subject, String text, String html) {
+        log.info("mail NOT sent (delivery disabled): to={} subject=\"{}\" textChars={} htmlChars={}",
+                redact(to), subject,
+                text == null ? 0 : text.length(),
+                html == null ? 0 : html.length());
     }
 
     @Override
