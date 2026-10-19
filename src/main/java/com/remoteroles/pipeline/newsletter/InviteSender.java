@@ -130,7 +130,8 @@ public class InviteSender {
             }
             subscribers.markInvited(lead.id());
             boolean accepted = mailer.send(lead.email(), subject(board),
-                    body(lead, board, sample), html(lead, board, sample));
+                    body(lead, board, sample), html(lead, board, sample),
+                    oneClickUnsubscribe(lead.unsubscribeToken()));
             if (!accepted) {
                 // Stop on the first refusal rather than working through the
                 // rest. The stamp on this one lead stands -- recovering it
@@ -236,6 +237,22 @@ public class InviteSender {
                 .query((rs, n) -> new Role(
                         rs.getLong("id"), rs.getString("title"), rs.getString("company")))
                 .list();
+    }
+
+    /**
+     * Where the List-Unsubscribe header points.
+     *
+     * <p>This matters more on an invitation than anywhere else on the site. The
+     * reader did not ask for this message, and the nearest control to "make
+     * this stop" in most clients is the one that reports it as spam. A native
+     * unsubscribe button, drawn by the client because this header is present,
+     * is the only thing standing between that impulse and the domain's
+     * reputation -- which the confirmation mail and the review alerts spend
+     * too.
+     */
+    private String oneClickUnsubscribe(String token) {
+        return "%s/api/unsubscribe?token=%s"
+                .formatted(siteUrl, URLEncoder.encode(token, StandardCharsets.UTF_8));
     }
 
     private static String count(int value) {
@@ -396,6 +413,7 @@ public class InviteSender {
         Board board = board();
         List<Role> sample = sample();
         mailer.send(to, "[preview] " + subject(board),
-                body(lead, board, sample), html(lead, board, sample));
+                body(lead, board, sample), html(lead, board, sample),
+                oneClickUnsubscribe(lead.unsubscribeToken()));
     }
 }

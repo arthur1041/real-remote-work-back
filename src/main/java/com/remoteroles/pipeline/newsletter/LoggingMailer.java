@@ -27,11 +27,12 @@ public class LoggingMailer implements Mailer {
     // outage to callers that back off on failure, and stall a queue in exactly
     // the configuration where nothing can go wrong.
     @Override
-    public boolean send(String to, String subject, String text, String html) {
-        log.info("mail NOT sent (delivery disabled): to={} subject=\"{}\" textChars={} htmlChars={}",
+    public boolean send(String to, String subject, String text, String html, String unsubscribeUrl) {
+        log.info("mail NOT sent (delivery disabled): to={} subject=\"{}\" textChars={} htmlChars={} unsub={}",
                 redact(to), subject,
                 text == null ? 0 : text.length(),
-                html == null ? 0 : html.length());
+                html == null ? 0 : html.length(),
+                unsubscribeUrl == null ? "none" : "yes");
         return true;
     }
 

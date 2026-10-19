@@ -30,13 +30,20 @@ public interface Mailer {
      * whole queue on a wall.
      *
      * @param html may be null, for mail that is genuinely text
+     * @param unsubscribeUrl the address a List-Unsubscribe header points at,
+     *        or null for mail nobody can unsubscribe from
      * @return true when the provider accepted the message
      */
-    boolean send(String to, String subject, String text, String html);
+    boolean send(String to, String subject, String text, String html, String unsubscribeUrl);
+
+    /** No unsubscribe header. For mail to the operator, which has no list to leave. */
+    default boolean send(String to, String subject, String text, String html) {
+        return send(to, subject, text, html, null);
+    }
 
     /** Text only. */
     default boolean send(String to, String subject, String text) {
-        return send(to, subject, text, null);
+        return send(to, subject, text, null, null);
     }
 
     /**

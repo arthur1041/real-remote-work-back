@@ -161,7 +161,8 @@ public class DigestSender {
             }
             subscribers.markDigestSent(person.id());
             mailer.send(person.email(), subject(roles.size()),
-                    body(roles, person), html(roles, person));
+                    body(roles, person), html(roles, person),
+                    oneClickUnsubscribe(person.unsubscribeToken()));
             sent++;
         }
 
@@ -212,6 +213,20 @@ public class DigestSender {
                         rs.getString("company"),
                         rs.getString("location")))
                 .list();
+    }
+
+    /**
+     * Where the List-Unsubscribe header points.
+     *
+     * <p>The body already carries an opt-out link; the provider cannot see it.
+     * This is the one the client itself uses to draw a native unsubscribe
+     * control, and a reader who finds that control does not reach for "report
+     * spam" -- which is the same outcome for them and a far worse one for the
+     * domain.
+     */
+    private String oneClickUnsubscribe(String token) {
+        return "%s/api/unsubscribe?token=%s"
+                .formatted(siteUrl, URLEncoder.encode(token, StandardCharsets.UTF_8));
     }
 
     private String subject(int count) {

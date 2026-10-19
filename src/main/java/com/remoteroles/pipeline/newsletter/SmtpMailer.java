@@ -53,13 +53,14 @@ public class SmtpMailer implements Mailer {
      * text.
      */
     @Override
-    public boolean send(String to, String subject, String text, String html) {
+    public boolean send(String to, String subject, String text, String html, String unsubscribeUrl) {
         try {
             MimeMessage message = sender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, html != null, "UTF-8");
             helper.setFrom(from());
             helper.setTo(to);
             helper.setSubject(subject);
+            addUnsubscribeHeaders(message, unsubscribeUrl);
             if (html == null) {
                 helper.setText(text);
             } else {
@@ -72,6 +73,41 @@ public class SmtpMailer implements Mailer {
             log.warn("mail failed: to={} subject=\"{}\" error={}",
                     LoggingMailer.redact(to), subject, e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Declares the way out to the mail client, not just to the reader.
+     *
+     * <p>Every message already carries an opt-out link in its body, and the
+     * provider cannot see it -- it does not read the HTML looking for the word
+     * unsubscribe. This header is the only place a sender gets to say "this is
+     * a managed list and here is how to leave it", and what it buys is the
+     * native unsubscribe control Gmail draws beside the sender name.
+     *
+     * <p>That control is worth more than it looks. A reader who wants out and
+     * cannot immediately see how presses "report spam" instead. Both actions
+     * end the mail; only one of them spends the domain's reputation, and that
+     * reputation is what delivers the confirmation links the product needs in
+     * order to work at all. The messages most exposed to this are the cold
+     * invitations, which is why it is worth having now rather than at the
+     * volume where Gmail and Yahoo begin to require it.
+     *
+     * <p>The second header is RFC 8058 one-click. Without it a provider may
+     * show the control but make the reader confirm on a web page, which is the
+     * friction this exists to remove.
+     */
+    private static void addUnsubscribeHeaders(MimeMessage message, String unsubscribeUrl) {
+        if (unsubscribeUrl == null || unsubscribeUrl.isBlank()) {
+            return;
+        }
+        try {
+            message.setHeader("List-Unsubscribe", "<" + unsubscribeUrl + ">");
+            message.setHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+        } catch (Exception e) {
+            // A message that goes out without the header is worse than one that
+            // does, and far better than one that does not go out at all.
+            log.warn("could not set unsubscribe headers: {}", e.getMessage());
         }
     }
 

@@ -82,7 +82,8 @@ public class ConfirmationSender {
             }
             // Stamped first. See markConfirmationSent.
             subscribers.markConfirmationSent(row.id());
-            mailer.send(row.email(), SUBJECT, body(row), html(row));
+            mailer.send(row.email(), SUBJECT, body(row), html(row),
+                    oneClickUnsubscribe(row.unsubscribeToken()));
             sent++;
         }
         log.info("confirmation emails sent: {}", sent);
@@ -125,6 +126,18 @@ public class ConfirmationSender {
                 """.formatted(confirm, unsubscribe, siteUrl);
     }
 
+    /**
+     * The address the List-Unsubscribe header points at.
+     *
+     * <p>Not the /unsubscribe page the body links to. A provider acting on the
+     * header sends a POST with no browser behind it, and the page answers a
+     * person with a sentence and a button -- so the header gets the endpoint
+     * built for one-click, and the body keeps the page built for a reader.
+     */
+    private String oneClickUnsubscribe(String token) {
+        return "%s/api/unsubscribe?token=%s".formatted(siteUrl, encode(token));
+    }
+
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
@@ -164,6 +177,7 @@ public class ConfirmationSender {
     public void sendPreview(String to) {
         SubscriberRepository.Awaiting row =
                 new SubscriberRepository.Awaiting(0, to, "preview-token", "preview-token");
-        mailer.send(to, "[preview] " + SUBJECT, body(row), html(row));
+        mailer.send(to, "[preview] " + SUBJECT, body(row), html(row),
+                oneClickUnsubscribe(row.unsubscribeToken()));
     }
 }
