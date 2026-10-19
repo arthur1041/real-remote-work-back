@@ -57,9 +57,15 @@ public class ScopeRechecker {
         for (JobRepository.ScopeCandidate candidate : candidates) {
             // The hint is true because every candidate is already an open remote
             // listing; see JobRepository.worldwideForRecheck for why that matters.
+            // The description is passed now, and it is the whole point of this
+            // pass: the location field on a feed is often the aggregator's
+            // word, and the body is the employer's. Before this it was null,
+            // so a recheck could never have found the forty-three postings
+            // whose own text contradicts the banner above them.
             Classification verdict = classifier.classify(FetchedPosting.ats(
                     String.valueOf(candidate.id()), candidate.title(), "",
-                    candidate.locationRaw(), null, null, Boolean.TRUE, null, null, "{}"));
+                    candidate.locationRaw(), candidate.descriptionHtml(),
+                    null, Boolean.TRUE, null, null, "{}"));
 
             if (verdict.geoScope() == GeoScope.WORLDWIDE) {
                 // Still worldwide, but the verdict can differ in its detail: the
@@ -81,6 +87,10 @@ public class ScopeRechecker {
                 moves.merge("SKIPPED_NOT_REMOTE", 1, Integer::sum);
                 continue;
             }
+            // UNKNOWN is written, unlike "not remote". It is not a failure to
+            // decide: it is the verdict that the posting's own description
+            // contradicts the worldwide claim, and leaving the row alone would
+            // keep serving the badge this pass exists to remove.
 
             changed += jobs.updateScope(candidate.id(), verdict);
             moves.merge(verdict.geoScope().name(), 1, Integer::sum);

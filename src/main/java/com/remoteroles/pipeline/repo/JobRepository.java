@@ -264,7 +264,7 @@ public class JobRepository {
 
     /** A listing's classifier inputs, for re-running a scope decision over stored rows. */
     public record ScopeCandidate(long id, String title, String locationRaw, String geoScope,
-                                 String timezoneRequirement) {
+                                 String timezoneRequirement, String descriptionHtml) {
     }
 
     /**
@@ -282,7 +282,8 @@ public class JobRepository {
      */
     public List<ScopeCandidate> worldwideForRecheck() {
         return db.sql("""
-                        select id, title, location_raw, geo_scope, timezone_requirement
+                        select id, title, location_raw, geo_scope, timezone_requirement,
+                               description_html
                           from jobs
                          where closed_at is null
                            and geo_scope = 'WORLDWIDE'
@@ -290,7 +291,8 @@ public class JobRepository {
                 .query((rs, n) -> new ScopeCandidate(
                         rs.getLong("id"), rs.getString("title"),
                         rs.getString("location_raw"), rs.getString("geo_scope"),
-                        rs.getString("timezone_requirement")))
+                        rs.getString("timezone_requirement"),
+                        rs.getString("description_html")))
                 .list();
     }
 

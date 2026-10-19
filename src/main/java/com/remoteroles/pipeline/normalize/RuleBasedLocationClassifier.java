@@ -117,6 +117,95 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
     /** Splits "Remote, Canada; Remote, US" and "Poland - Remote OR Romania - Remote". */
     private static final Pattern LOCATION_SPLIT = Pattern.compile("\\s*(?:;|\\bor\\b|/|\\|)\\s*");
 
+    /**
+     * Phrases in a description that take a worldwide badge away.
+     *
+     * <p>Only ever take it away. A description is never allowed to grant
+     * WORLDWIDE, and the asymmetry is the same one the title gate runs on: a
+     * posting promising openness in its prose is marketing, while a posting
+     * naming somewhere a person must live is a lawyer. "Remote-first, work from
+     * anywhere!" sits in the body of roles gated to one US state all day long;
+     * "you must live in a state where the company operates" does not appear by
+     * accident.
+     *
+     * <p>Every pattern was measured against the live corpus before it was kept,
+     * and several plausible ones were thrown out for catching the wrong thing:
+     * "entity in" matched "identity integration" and "Payroll Client Services";
+     * "core hours" matched "no strict core hours", which is the opposite of a
+     * restriction; "relocation to" matched a visa-sponsorship perk; "(US only)"
+     * matched a share plan offered to US employees of a role anyone could take.
+     * A list like this is only as good as the postings it was checked against.
+     */
+    private static final Pattern DESCRIPTION_VETO = Pattern.compile(
+            "(?:"
+                    + "must be (?:physically )?located in"
+                    + "|must (?:reside|be residing) in|must be a resident of"
+                    + "|must (?:live|be living) in"
+                    + "|(?:role|position|job) (?:is )?based in"
+                    + "|requires? residency in"
+                    + "|can only (?:hire|employ|onboard)"
+                    + "|hiring is (?:limited|restricted) to"
+                    + "|(?:only open to|open only to) [^.!?]{0,40}(?:candidates|applicants|residents)"
+                    + "|only accepting applications from"
+                    + "|(?:applications|applicants) (?:are )?(?:limited|restricted) to"
+                    + "|only hiring (?:those|people|candidates) (?:authoriz|authoris)"
+                    + "|(?:authoriz|authoris)(?:ed|ation) to work in (?:the )?[A-Z][a-z]"
+                    + "|right to work in (?:the )?[A-Z][a-z]"
+                    + "|within (?:the )?(?:EU|European|CET|CEST|EST|EDT|PST|PDT|CST|GMT|BST|IST|AEST|UK|US)"
+                    + " time ?zones?"
+                    + "|collaborate within [^.!?]{0,20}time ?zones?"
+                    + "|\\d\\s*h(?:ours?)? overlap with [^.!?]{0,25}time ?zone"
+                    + "|[A-Z][a-z]+-based candidates"
+                    + ")");
+
+    /**
+     * Phrasings that look like a veto and are not one.
+     *
+     * <p>Checked against the text around each match, because the difference is
+     * entirely in what follows. "Authorised to work in Germany" is a gate.
+     * "Authorised to work in the country in which you apply" is boilerplate
+     * every international employer carries and restricts nobody -- it was found
+     * on a genuinely worldwide posting while this was being written, and
+     * without the exemption the rule would have removed it.
+     */
+    private static final Pattern VETO_EXEMPT = Pattern.compile(
+            "to work in (?:the )?(?:country|countries|location|jurisdiction)"
+                    + "|to work in your"
+                    + "|within \\d",
+            Pattern.CASE_INSENSITIVE);
+
+    /** Strips tags so the patterns read prose rather than markup. */
+    private static String descriptionText(String html) {
+        if (html == null || html.isBlank()) {
+            return "";
+        }
+        return html.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ");
+    }
+
+    /**
+     * Whether the posting's own description contradicts a worldwide reading.
+     *
+     * <p>Case-sensitive on purpose, unlike every other pattern here. The
+     * country-naming branches depend on a capital letter -- "authorised to work
+     * in Germany" restricts, "authorised to work in the country where you live"
+     * does not -- and lowercasing the text first would collapse the two.
+     */
+    static boolean descriptionContradictsWorldwide(String html) {
+        String text = descriptionText(html);
+        if (text.isEmpty()) {
+            return false;
+        }
+        Matcher match = DESCRIPTION_VETO.matcher(text);
+        while (match.find()) {
+            int from = Math.max(0, match.start() - 40);
+            int to = Math.min(text.length(), match.end() + 60);
+            if (!VETO_EXEMPT.matcher(text.substring(from, to)).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public Classification classify(FetchedPosting posting) {
         String location = normalize(posting.locationRaw());
@@ -238,6 +327,24 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
                                 String.join(", ", titleCountries), timezone, 0.8, VERSION)
                         : new Classification(true, GeoScope.COUNTRY,
                                 titleCountries.iterator().next(), timezone, 0.8, VERSION);
+            }
+
+            // Last gate of all: the posting's own description.
+            //
+            // The location field on a feed is often written by the aggregator
+            // rather than by the employer. WeWorkRemotely stamps "Anywhere in
+            // the World" on roles whose body says they are based in Hungary,
+            // restricted to five named countries, or limited to the US states a
+            // company is registered in. The description is what the employer
+            // wrote, and where it contradicts the banner the banner is wrong.
+            //
+            // UNKNOWN rather than a guess at the real restriction. Reading the
+            // gate out of prose is a different and much less reliable job than
+            // noticing that a gate exists, and this site's rule is to stop
+            // asserting what it cannot support rather than to infer a
+            // replacement.
+            if (descriptionContradictsWorldwide(posting.descriptionHtml())) {
+                return new Classification(true, GeoScope.UNKNOWN, null, timezone, 0.6, VERSION);
             }
 
             // A stated timezone band contradicts "anywhere", so drop confidence
