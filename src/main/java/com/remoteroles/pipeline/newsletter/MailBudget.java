@@ -61,32 +61,75 @@ public class MailBudget {
     }
 
     private final JdbcClient db;
-    private final int daily;
-    private final int reserve;
+    private final Limits fallback;
 
     public MailBudget(
             JdbcClient db,
             @Value("${newsletter.budget.daily:280}") int daily,
             @Value("${newsletter.budget.transactional-reserve:60}") int reserve) {
         this.db = db;
-        this.daily = Math.max(0, daily);
-        // Clamped rather than trusted. A reserve larger than the budget would
-        // make the cold ceiling negative, which reads as "no invitations ever"
-        // -- true to the arithmetic and almost certainly not what was meant by
-        // whoever set the two numbers.
-        this.reserve = Math.min(Math.max(0, reserve), this.daily);
-        log.info("mail budget: {} a day, {} of it reserved for transactional mail "
-                        + "(invitations stop at {})",
-                this.daily, this.reserve, coldCeiling());
+        this.fallback = limits(daily, reserve);
+    }
+
+    /**
+     * What may be sent today, and how much of it to cold mail.
+     *
+     * @param daily messages of any kind
+     * @param coldCeiling the point at which invitations stop
+     */
+    public record Limits(int daily, int coldCeiling) {}
+
+    /**
+     * Builds the pair, clamping whatever was typed into something coherent.
+     *
+     * <p>A reserve larger than the budget would make the cold ceiling negative,
+     * which is arithmetically true and operationally absurd. A negative budget
+     * is not a licence to send. These come from a form and an environment file,
+     * which is to say from people, so neither is trusted as given.
+     */
+    public static Limits limits(int daily, int reserve) {
+        int d = Math.max(0, daily);
+        int r = Math.min(Math.max(0, reserve), d);
+        return new Limits(d, d - r);
+    }
+
+    /**
+     * The limits in force right now, read from the settings row.
+     *
+     * <p>From the database rather than configuration, because these are
+     * operational decisions somebody makes while watching an import drain --
+     * the same kind of thing as the cadence and the audience beside them, and
+     * the wrong kind of thing to need a restart.
+     *
+     * <p>Falls back to the configured values when the row cannot be read, which
+     * covers the window before the migration and any failure to reach the
+     * database. Failing to a sane limit is better than failing to none.
+     */
+    private Limits currentLimits() {
+        try {
+            return db.sql("""
+                            select mail_daily_budget, mail_transactional_reserve
+                              from newsletter_settings where id = 1
+                            """)
+                    .query((rs, n) -> limits(
+                            rs.getInt("mail_daily_budget"),
+                            rs.getInt("mail_transactional_reserve")))
+                    .optional()
+                    .orElse(fallback);
+        } catch (Exception e) {
+            log.warn("could not read mail budget settings, using configured fallback: {}",
+                    e.getMessage());
+            return fallback;
+        }
     }
 
     /** Messages that may go out today before cold mail stops. */
     public int coldCeiling() {
-        return daily - reserve;
+        return currentLimits().coldCeiling();
     }
 
     public int dailyBudget() {
-        return daily;
+        return currentLimits().daily();
     }
 
     /**
@@ -100,11 +143,13 @@ public class MailBudget {
      * @return true when the message may be sent
      */
     public boolean claim(Tier tier) {
-        int ceiling = tier == Tier.COLD ? coldCeiling() : daily;
+        Limits limits = currentLimits();
+        int ceiling = tier == Tier.COLD ? limits.coldCeiling() : limits.daily();
         if (ceiling <= 0) {
             return false;
         }
         int cold = tier == Tier.COLD ? 1 : 0;
+        int daily = limits.daily();
 
         // The guard is on the conflict path only, which is correct: the insert
         // creates the day's first row, and one message is always within a
@@ -122,7 +167,7 @@ public class MailBudget {
                         """)
                 .param("cold", cold)
                 .param("daily", daily)
-                .param("coldLimit", coldCeiling())
+                .param("coldLimit", limits.coldCeiling())
                 .param("ceiling", ceiling)
                 .query(Integer.class)
                 .optional()
@@ -148,6 +193,7 @@ public class MailBudget {
      */
     public void record(Tier tier) {
         int cold = tier == Tier.COLD ? 1 : 0;
+        Limits limits = currentLimits();
         db.sql("""
                         insert into mail_budget (day, sent, cold, daily_limit, cold_limit)
                         values (current_date, 1, :cold, :daily, :coldLimit)
@@ -158,8 +204,8 @@ public class MailBudget {
                                cold_limit = excluded.cold_limit
                         """)
                 .param("cold", cold)
-                .param("daily", daily)
-                .param("coldLimit", coldCeiling())
+                .param("daily", limits.daily())
+                .param("coldLimit", limits.coldCeiling())
                 .update();
     }
 
@@ -172,13 +218,18 @@ public class MailBudget {
      * these numbers. A quiet morning would render as an absence, which is
      * indistinguishable on screen from the budget not working.
      *
-     * <p>It also refreshes the limits on an already-written row, so changing
-     * the configuration and restarting is visible immediately rather than at
-     * the next send.
+     * <p>It also refreshes the limits on an already-written row. Since the
+     * numbers moved into the settings table that matters less -- every claim
+     * reads them -- but it keeps the day's row honest between sends, which is
+     * what the admin screen reads.
      */
     @EventListener(ApplicationReadyEvent.class)
     @Scheduled(cron = "${newsletter.budget.open-day-cron:0 1 0 * * *}")
     public void openToday() {
+        Limits limits = currentLimits();
+        log.info("mail budget: {} a day, {} of it reserved for transactional mail "
+                        + "(invitations stop at {})",
+                limits.daily(), limits.daily() - limits.coldCeiling(), limits.coldCeiling());
         db.sql("""
                         insert into mail_budget (day, sent, cold, daily_limit, cold_limit)
                         values (current_date, 0, 0, :daily, :coldLimit)
@@ -186,8 +237,8 @@ public class MailBudget {
                            set daily_limit = excluded.daily_limit,
                                cold_limit = excluded.cold_limit
                         """)
-                .param("daily", daily)
-                .param("coldLimit", coldCeiling())
+                .param("daily", limits.daily())
+                .param("coldLimit", limits.coldCeiling())
                 .update();
     }
 

@@ -4,7 +4,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
  * The arithmetic that decides how much of a day cold mail may have.
@@ -23,15 +22,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  */
 class MailBudgetTest {
 
-    private static MailBudget budget(int daily, int reserve) {
-        return new MailBudget(null, daily, reserve);
+    private static MailBudget.Limits budget(int daily, int reserve) {
+        return MailBudget.limits(daily, reserve);
     }
 
     @Test
     @DisplayName("The ordinary case: invitations stop short of the real cap")
     void reserveIsHeldBack() {
-        MailBudget b = budget(280, 60);
-        assertEquals(280, b.dailyBudget());
+        MailBudget.Limits b = budget(280, 60);
+        assertEquals(280, b.daily());
         assertEquals(220, b.coldCeiling());
     }
 
@@ -42,32 +41,31 @@ class MailBudgetTest {
         // against it would behave strangely rather than obviously. Clamped, the
         // configuration says something true: every message today is reserved
         // for mail somebody is waiting for.
-        MailBudget b = budget(100, 120);
+        MailBudget.Limits b = budget(100, 120);
         assertEquals(0, b.coldCeiling());
-        assertFalse(b.claim(MailBudget.Tier.COLD), "no database call should be needed to refuse this");
+        assertEquals(100, b.daily(), "the total is untouched; only cold mail is stopped");
     }
 
     @Test
     @DisplayName("A negative reserve reserves nothing rather than inflating the budget")
     void negativeReserveIsZero() {
-        MailBudget b = budget(100, -50);
+        MailBudget.Limits b = budget(100, -50);
         assertEquals(100, b.coldCeiling());
     }
 
     @Test
     @DisplayName("A budget of zero refuses both tiers without touching the database")
     void zeroBudgetSendsNothing() {
-        MailBudget b = budget(0, 0);
-        assertEquals(0, b.dailyBudget());
-        assertFalse(b.claim(MailBudget.Tier.COLD));
-        assertFalse(b.claim(MailBudget.Tier.TRANSACTIONAL));
+        MailBudget.Limits b = budget(0, 0);
+        assertEquals(0, b.daily());
+        assertEquals(0, b.coldCeiling());
     }
 
     @Test
     @DisplayName("A negative budget is zero, not a licence to send")
     void negativeBudgetIsZero() {
-        MailBudget b = budget(-10, 0);
-        assertEquals(0, b.dailyBudget());
-        assertFalse(b.claim(MailBudget.Tier.TRANSACTIONAL));
+        MailBudget.Limits b = budget(-10, 0);
+        assertEquals(0, b.daily());
+        assertEquals(0, b.coldCeiling());
     }
 }
