@@ -7,8 +7,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import com.remoteroles.pipeline.newsletter.ConfirmationSender;
 import com.remoteroles.pipeline.newsletter.DigestSender;
+import com.remoteroles.pipeline.newsletter.EmailVerificationSender;
 import com.remoteroles.pipeline.newsletter.InviteSender;
 import com.remoteroles.pipeline.newsletter.MailBudget;
+import com.remoteroles.pipeline.newsletter.PostingDecisionSender;
 import com.remoteroles.pipeline.newsletter.ReviewAlerter;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -34,6 +36,8 @@ public class AdminController {
     private final DigestSender digest;
     private final InviteSender invites;
     private final ReviewAlerter reviews;
+    private final PostingDecisionSender decisions;
+    private final EmailVerificationSender verifications;
     // Conditional on its own switch, so it may genuinely be absent. An
     // ObjectProvider is the difference between a preview that reports one
     // template missing and a service that refuses to start.
@@ -44,6 +48,8 @@ public class AdminController {
     private final ScopeRechecker rechecker;
 
     public AdminController(DigestSender digest, InviteSender invites, ReviewAlerter reviews,
+                           PostingDecisionSender decisions,
+                           EmailVerificationSender verifications,
                            ObjectProvider<ConfirmationSender> confirmations,
                            MailBudget budget,
                            IngestionService ingestion, JobRepository jobs,
@@ -55,6 +61,8 @@ public class AdminController {
         this.digest = digest;
         this.invites = invites;
         this.reviews = reviews;
+        this.decisions = decisions;
+        this.verifications = verifications;
         this.confirmations = confirmations;
     }
 
@@ -141,7 +149,7 @@ public class AdminController {
      * relay counts these like any other message, so leaving them out would make
      * the day's total quietly wrong in the direction that matters.
      *
-     * <p>{@code only} names a single template. Without it all four go, which is
+     * <p>{@code only} names a single template. Without it all of them go, which is
      * right the first time and wrong every time after: one template changes, four
      * arrive, and the three that did not change are the ones being compared
      * against a memory of yesterday.
@@ -179,6 +187,27 @@ public class AdminController {
             reviews.sendPreview(to);
             budget.record(MailBudget.Tier.TRANSACTIONAL);
             result.put("reviewAlert", "sent");
+        }
+
+        // Two messages, not one, and separately nameable. "decision" sends both;
+        // either half can be asked for alone, which is what reviewing a change
+        // to one of them actually needs.
+        if (wanted(only, "decision") || "decisionApproved".equalsIgnoreCase(only)) {
+            decisions.sendApprovedPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
+            result.put("decisionApproved", "sent");
+        }
+
+        if (wanted(only, "decision") || "decisionRejected".equalsIgnoreCase(only)) {
+            decisions.sendRejectedPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
+            result.put("decisionRejected", "sent");
+        }
+
+        if (wanted(only, "verification")) {
+            verifications.sendPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
+            result.put("verification", "sent");
         }
 
         if (result.isEmpty()) {
