@@ -43,6 +43,24 @@ class DescriptionContradictsWorldwideTest {
             "Fully remote work with flexible hours (within the CET time zone) from any location of your choice.",
             "Availability to collaborate within European time zones.",
             "Experience with ProductOps is a bonus. 4h overlap with CET time zone.",
+            // Added after fourteen live postings got through the rule above.
+            // Six of them say "open to candidates ... in <place>" without the
+            // word "only", which was all the earlier pattern looked for; the
+            // rest say "must be based in", the one spelling missing from a
+            // line that already had located, reside and live.
+            "This is a hybrid position open to candidates residing in Canada.",
+            "This contract engagement is open to candidates based in the Netherlands.",
+            "This is a remote position open to candidates residing in the US.",
+            "Location Requirement: This role is open to candidates located in "
+                    + "British Columbia or Ontario, Canada.",
+            "Note: This is a remote role open to candidates located in Arizona, "
+                    + "California, Colorado, Connecticut, District of Columbia, Florida",
+            "Location The Director of MEAL must be based in Africa.",
+            "Location: This role is remote (must be based in Chicago)",
+            "Location: This role is remote (must be based in the Mid-Atlantic: "
+                    + "Washington, D.C., DE, MD, PA, VA, WV)",
+            "You must be based in the EU timezone to ensure collaboration with the team.",
+            "This is a remote role that must be based in EST.",
     })
     @DisplayName("A posting that names where somebody must be loses the badge")
     void contradicts(String description) {
@@ -73,6 +91,15 @@ class DescriptionContradictsWorldwideTest {
             "We collect information as defined under California law from job applicants "
                     + "who are residents of California.",
             "Location: Remote, with flexible overlap with client's timezone.",
+            // The guards on the two patterns added above. Each is the same
+            // words as a gate pointed at the whole world, and reading one as a
+            // restriction would take a genuinely open role off the homepage --
+            // the more expensive of the two mistakes this rule can make.
+            "We are open to candidates from all backgrounds.",
+            "This role is open to candidates with 5+ years of experience.",
+            "We are open to candidates based in any country.",
+            "You must be based in your country of residence.",
+            "Open to candidates located anywhere in the world.",
     })
     @DisplayName("Boilerplate, perks and absent policies are not restrictions")
     void doesNotContradict(String description) {

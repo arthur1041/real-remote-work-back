@@ -136,9 +136,27 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
      * matched a share plan offered to US employees of a role anyone could take.
      * A list like this is only as good as the postings it was checked against.
      */
+    /**
+     * What follows "in" when the sentence is not a restriction after all.
+     *
+     * <p>"Open to candidates based in any country" and "must be based in your
+     * country of residence" are the same words as a gate, pointed at the whole
+     * world. Both patterns below end at "in", so without this they would read a
+     * statement of openness as its opposite -- and a wrong UNKNOWN badge on a
+     * genuinely worldwide role takes it off the homepage, which is the more
+     * expensive of the two mistakes for this board.
+     */
+    private static final String NOT_UNRESTRICTED =
+            "(?!\\s+(?:any\\b|anywhere|your\\b|the world\\b|a country\\b|all\\b|multiple\\b|several\\b))";
+
     private static final Pattern DESCRIPTION_VETO = Pattern.compile(
             "(?:"
                     + "must be (?:physically )?located in"
+                    // "based" belongs beside located/reside/live: it is the fourth
+                    // way of writing one sentence, and it was the missing one.
+                    // Caught two roles reading "must be based in Africa", one in
+                    // Chicago and one in a named band of US states.
+                    + "|must be based in" + NOT_UNRESTRICTED
                     + "|must (?:reside|be residing) in|must be a resident of"
                     + "|must (?:live|be living) in"
                     + "|(?:role|position|job) (?:is )?based in"
@@ -146,6 +164,16 @@ public class RuleBasedLocationClassifier implements LocationClassifier {
                     + "|can only (?:hire|employ|onboard)"
                     + "|hiring is (?:limited|restricted) to"
                     + "|(?:only open to|open only to) [^.!?]{0,40}(?:candidates|applicants|residents)"
+                    // The same sentence without the word "only", which is how most
+                    // of them are actually written: "open to candidates residing in
+                    // Canada", "open to candidates based in the Netherlands". The
+                    // word cannot simply be dropped from the line above -- "open to
+                    // candidates from all backgrounds" is every third posting -- so
+                    // what carries the restriction here is the residency participle
+                    // and a place behind it, not the opening phrase.
+                    + "|open to [^.!?]{0,40}?(?:candidates|applicants|residents|employees)\\s+"
+                    + "(?:who\\s+(?:are|live)\\s+)?(?:residing|located|living|based|resident)\\s+in"
+                    + NOT_UNRESTRICTED
                     + "|only accepting applications from"
                     + "|(?:applications|applicants) (?:are )?(?:limited|restricted) to"
                     + "|only hiring (?:those|people|candidates) (?:authoriz|authoris)"
