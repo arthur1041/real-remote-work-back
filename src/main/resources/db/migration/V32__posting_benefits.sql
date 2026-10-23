@@ -1,0 +1,16 @@
+-- What a directly posted role offers.
+--
+-- Scraped listings have had this since the start: `BenefitExtractor` reads the
+-- description and fills `jobs.benefits`, which is what the
+-- /remote-jobs-with/<benefit> pages are built from. A role posted through the
+-- form had no way to say, so every one of them carried an empty array and
+-- appeared on none of those pages.
+--
+-- That is the wrong way round. Those pages exist because the queries behind
+-- them have measured search demand, and they are among the few on this site
+-- that do. A scraped role reached them and a paying employer's did not.
+--
+-- Declared rather than inferred, like eligibility. The extractor guesses from
+-- prose; the employer knows. Where the two could disagree, the one who wrote
+-- the job wins.
+alter table employer_postings add column benefits text[];
