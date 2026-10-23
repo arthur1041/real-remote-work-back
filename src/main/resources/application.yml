@@ -147,3 +147,26 @@ indexing:
   key-file: ${INDEXING_KEY_FILE:}
   daily-budget: ${INDEXING_DAILY_BUDGET:180}
   cron: ${INDEXING_CRON:0 25 * * * *}
+
+# The second reader on a worldwide listing.
+#
+# Runs after the ingest, never inside it: a model that is slow or unreachable
+# must not be able to hold up a fetch. Only listings the rule classifier called
+# WORLDWIDE are ever sent, which is about twenty-seven a day out of nearly four
+# hundred -- a role already gated cannot contradict a promise it does not make,
+# so paying to read one would buy nothing.
+#
+# The cheapest model available was also the most accurate on this task, scoring
+# 26/26 against hand-checked answers across three runs where the dearer one
+# scored 25. Measured cost at that volume is about forty US cents a month.
+scope-review:
+  enabled: ${SCOPE_REVIEW_ENABLED:false}
+  key-file: ${SCOPE_REVIEW_KEY_FILE:}
+  project: ${SCOPE_REVIEW_PROJECT:actually-remote}
+  # Only the global endpoint serves Gemini for this project; us-central1
+  # answers NOT_FOUND for every model name.
+  location: ${SCOPE_REVIEW_LOCATION:global}
+  model: ${SCOPE_REVIEW_MODEL:gemini-3.1-flash-lite}
+  batch-size: ${SCOPE_REVIEW_BATCH:60}
+  # Twenty minutes after the ingest, which runs at 04:17.
+  cron: ${SCOPE_REVIEW_CRON:0 40 4 * * *}

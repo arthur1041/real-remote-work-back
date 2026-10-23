@@ -2,6 +2,7 @@ package com.remoteroles.pipeline.api;
 
 import com.remoteroles.pipeline.ingest.IngestionService;
 import com.remoteroles.pipeline.normalize.ScopeRechecker;
+import com.remoteroles.pipeline.normalize.ScopeReviewer;
 import com.remoteroles.pipeline.repo.JobRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,6 +43,9 @@ public class AdminController {
     // ObjectProvider is the difference between a preview that reports one
     // template missing and a service that refuses to start.
     private final ObjectProvider<ConfirmationSender> confirmations;
+    // Absent unless scope-review.enabled is on, so the endpoint can say so
+    // rather than failing to start the application.
+    private final ObjectProvider<ScopeReviewer> scopeReviewer;
     private final MailBudget budget;
     private final IngestionService ingestion;
     private final JobRepository jobs;
@@ -51,6 +55,7 @@ public class AdminController {
                            PostingDecisionSender decisions,
                            EmailVerificationSender verifications,
                            ObjectProvider<ConfirmationSender> confirmations,
+                           ObjectProvider<ScopeReviewer> scopeReviewer,
                            MailBudget budget,
                            IngestionService ingestion, JobRepository jobs,
                            ScopeRechecker rechecker) {
@@ -64,6 +69,7 @@ public class AdminController {
         this.decisions = decisions;
         this.verifications = verifications;
         this.confirmations = confirmations;
+        this.scopeReviewer = scopeReviewer;
     }
 
     @GetMapping("/health")
@@ -99,6 +105,25 @@ public class AdminController {
     @PostMapping("/recheck/worldwide")
     public ScopeRechecker.Result recheckWorldwide() {
         return rechecker.recheckWorldwide();
+    }
+
+    /**
+     * Runs the model over worldwide listings it has not read yet.
+     *
+     * <p>The same work the nightly pass does, on demand: for trying a prompt
+     * change against the live corpus without waiting a day, and for catching up
+     * after a run that failed. Safe to call twice -- a listing whose text has
+     * already been judged is skipped by its content hash, so a second call
+     * costs nothing rather than paying to ask the same question again.
+     */
+    @PostMapping("/scope-review/run")
+    public Map<String, Object> runScopeReview() {
+        ScopeReviewer reviewer = scopeReviewer.getIfAvailable();
+        if (reviewer == null) {
+            return Map.of("enabled", false,
+                    "detail", "set SCOPE_REVIEW_ENABLED=true and SCOPE_REVIEW_KEY_FILE");
+        }
+        return Map.of("enabled", true, "reviewed", reviewer.reviewPending());
     }
 
     /** Retires stored listings that were never roles. See JobRepository#retireNonRoles. */
