@@ -117,13 +117,21 @@ public class AdminController {
      * costs nothing rather than paying to ask the same question again.
      */
     @PostMapping("/scope-review/run")
-    public Map<String, Object> runScopeReview() {
+    public Map<String, Object> runScopeReview(
+            @RequestParam(name = "ageDays", required = false) Integer ageDays) {
         ScopeReviewer reviewer = scopeReviewer.getIfAvailable();
         if (reviewer == null) {
             return Map.of("enabled", false,
                     "detail", "set SCOPE_REVIEW_ENABLED=true and SCOPE_REVIEW_KEY_FILE");
         }
-        return Map.of("enabled", true, "reviewed", reviewer.reviewPending());
+        // `ageDays` widens the window past the nightly one, a batch at a time,
+        // for deliberately working through listings already stored. Left out,
+        // it behaves exactly as the scheduled run does.
+        int reviewed = ageDays == null
+                ? reviewer.reviewPending()
+                : reviewer.reviewPending(ageDays);
+        return Map.of("enabled", true, "reviewed", reviewed,
+                "ageDays", ageDays == null ? "default" : String.valueOf(ageDays));
     }
 
     /** Retires stored listings that were never roles. See JobRepository#retireNonRoles. */

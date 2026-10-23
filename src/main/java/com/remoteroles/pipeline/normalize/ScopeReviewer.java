@@ -200,6 +200,18 @@ public class ScopeReviewer {
      * @return how many listings were judged
      */
     public int reviewPending() {
+        return reviewPending(maxAgeDays);
+    }
+
+    /**
+     * The same pass over a wider window, for catching up on purpose.
+     *
+     * <p>The nightly run only looks at what has just arrived, so the corpus
+     * already stored is never touched by accident. This is how it gets touched
+     * on purpose -- after a classifier rule is removed, say, when listings it
+     * had been holding are about to return to the homepage unread.
+     */
+    public int reviewPending(int ageDays) {
         List<Candidate> waiting = db.sql("""
                         select j.id, j.title, j.description_html, j.content_hash
                           from jobs j
@@ -217,7 +229,7 @@ public class ScopeReviewer {
                          limit :limit
                         """)
                 .param("limit", batchSize)
-                .param("maxAge", String.valueOf(maxAgeDays))
+                .param("maxAge", String.valueOf(ageDays))
                 .query((rs, n) -> new Candidate(rs.getLong("id"), rs.getString("title"),
                         rs.getString("description_html"), rs.getString("content_hash")))
                 .list();
