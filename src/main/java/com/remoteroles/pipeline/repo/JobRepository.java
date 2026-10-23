@@ -69,11 +69,37 @@ public class JobRepository {
                             apply_url                 = excluded.apply_url,
                             location_raw              = excluded.location_raw,
                             is_remote                 = excluded.is_remote,
-                            geo_scope                 = excluded.geo_scope,
-                            geo_detail                = excluded.geo_detail,
+                            -- The model's verdict survives a re-fetch, the rules'
+                            -- does not need to. A rule verdict is recomputed inside
+                            -- classify() on every ingest, so `excluded` already
+                            -- carries it. The model runs afterwards, as its own
+                            -- update, so an unconditional overwrite here silently
+                            -- undid it -- measured: sixteen listings the model had
+                            -- taken off the homepage were back on it after one
+                            -- fetch, and because their text had not changed they
+                            -- were never going to be read again.
+                            --
+                            -- Only while the text is the same. A rewritten
+                            -- description is a new question, and the rules get to
+                            -- answer it first.
+                            geo_scope                 = case
+                                when jobs.classified_by = 'MODEL_V1'
+                                 and jobs.content_hash = excluded.content_hash
+                                then jobs.geo_scope else excluded.geo_scope end,
+                            geo_detail                = case
+                                when jobs.classified_by = 'MODEL_V1'
+                                 and jobs.content_hash = excluded.content_hash
+                                then jobs.geo_detail else excluded.geo_detail end,
                             timezone_requirement      = excluded.timezone_requirement,
-                            classification_confidence = excluded.classification_confidence,
-                            classified_by             = excluded.classified_by,
+                            classification_confidence = case
+                                when jobs.classified_by = 'MODEL_V1'
+                                 and jobs.content_hash = excluded.content_hash
+                                then jobs.classification_confidence
+                                else excluded.classification_confidence end,
+                            classified_by             = case
+                                when jobs.classified_by = 'MODEL_V1'
+                                 and jobs.content_hash = excluded.content_hash
+                                then jobs.classified_by else excluded.classified_by end,
                             employment_type           = excluded.employment_type,
                             department                = excluded.department,
                             category                  = excluded.category,

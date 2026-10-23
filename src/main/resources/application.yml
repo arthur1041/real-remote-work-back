@@ -168,5 +168,10 @@ scope-review:
   location: ${SCOPE_REVIEW_LOCATION:global}
   model: ${SCOPE_REVIEW_MODEL:gemini-3.1-flash-lite}
   batch-size: ${SCOPE_REVIEW_BATCH:60}
+  # Only listings that have just arrived. The corpus already stored is left
+  # alone on purpose -- reading it is a separate decision with its own bill,
+  # and without this cap the nightly pass works backwards through all of it at
+  # the batch size a night.
+  max-age-days: ${SCOPE_REVIEW_MAX_AGE_DAYS:3}
   # Twenty minutes after the ingest, which runs at 04:17.
   cron: ${SCOPE_REVIEW_CRON:0 40 4 * * *}

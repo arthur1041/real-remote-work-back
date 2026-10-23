@@ -143,6 +143,7 @@ public class ScopeReviewer {
     private final String endpoint;
     private final String model;
     private final int batchSize;
+    private final int maxAgeDays;
 
     public ScopeReviewer(
             JdbcClient db,
@@ -150,11 +151,13 @@ public class ScopeReviewer {
             @Value("${scope-review.project}") String project,
             @Value("${scope-review.location:global}") String location,
             @Value("${scope-review.model:gemini-3.1-flash-lite}") String model,
-            @Value("${scope-review.batch-size:60}") int batchSize) throws Exception {
+            @Value("${scope-review.batch-size:60}") int batchSize,
+            @Value("${scope-review.max-age-days:3}") int maxAgeDays) throws Exception {
         this.db = db;
         this.account = new GoogleServiceAccount(Path.of(keyFile), SCOPE);
         this.model = model;
         this.batchSize = batchSize;
+        this.maxAgeDays = maxAgeDays;
         // The global endpoint has no region prefix, and for this project it is
         // the only one that serves any Gemini model at all -- us-central1
         // returns NOT_FOUND for every one of them.
@@ -203,10 +206,18 @@ public class ScopeReviewer {
                          where j.closed_at is null
                            and j.geo_scope = 'WORLDWIDE'
                            and j.scope_reviewed_hash is distinct from j.content_hash
+                           -- Only what has just arrived. Without this the pass
+                           -- works backwards through everything already stored at
+                           -- the batch size a night -- 85 of the first 120 verdicts
+                           -- were spent on listings months old, which is the corpus
+                           -- that was explicitly left out. Reviewing it is a
+                           -- separate decision with its own bill.
+                           and j.first_seen_at > now() - (:maxAge || ' days')::interval
                          order by j.first_seen_at desc
                          limit :limit
                         """)
                 .param("limit", batchSize)
+                .param("maxAge", String.valueOf(maxAgeDays))
                 .query((rs, n) -> new Candidate(rs.getLong("id"), rs.getString("title"),
                         rs.getString("description_html"), rs.getString("content_hash")))
                 .list();
@@ -231,11 +242,16 @@ public class ScopeReviewer {
                                 update jobs
                                    set geo_scope = 'UNKNOWN', geo_detail = null,
                                        classification_confidence = 0.6,
-                                       classified_by = :model
+                                       -- A classifier version, like RULES_V1, not
+                                       -- the model name: the upsert keys on this to
+                                       -- know the verdict is the model's and must
+                                       -- not be overwritten, and swapping models
+                                       -- must not quietly turn that off. Which
+                                       -- model answered is on the verdict row.
+                                       classified_by = 'MODEL_V1'
                                  where id = :id and geo_scope = 'WORLDWIDE'
                                 """)
                         .param("id", job.id())
-                        .param("model", model)
                         .update() > 0;
                 restricted++;
             }
