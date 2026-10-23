@@ -128,6 +128,26 @@ class ScopeReviewerTest {
         }
 
         @Test
+        @DisplayName("matches across an entity the flattening left behind")
+        void toleratesEntities() {
+            // "&nbsp;" survives tag-stripping as the letters "nbsp", which the
+            // model's quote never has. This rejected five real restrictions.
+            assertTrue(ScopeReviewer.quoted(
+                    "This role will be remote, and based in the United States.",
+                    ScopeReviewer.plainText(
+                            "<p>This role will be remote,&nbsp; and based in the United States.</p>")));
+        }
+
+        @Test
+        @DisplayName("matches a quote that is not in the Latin alphabet")
+        void handlesNonLatin() {
+            // "this role is based in Japan", from a live Zscaler posting that
+            // was refused because the comparison deleted every character.
+            String text = ScopeReviewer.plainText("<p>この職務は日本を拠点とし、リージョナルディレクター直属となります。</p>");
+            assertTrue(ScopeReviewer.quoted("この職務は日本を拠点とし", text));
+        }
+
+        @Test
         @DisplayName("rejects a fragment too short to mean anything")
         void rejectsTooShort() {
             assertFalse(ScopeReviewer.quoted("the US", TEXT),

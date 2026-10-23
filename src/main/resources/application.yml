@@ -168,10 +168,18 @@ scope-review:
   location: ${SCOPE_REVIEW_LOCATION:global}
   model: ${SCOPE_REVIEW_MODEL:gemini-3.1-flash-lite}
   batch-size: ${SCOPE_REVIEW_BATCH:60}
-  # Only listings that have just arrived. The corpus already stored is left
-  # alone on purpose -- reading it is a separate decision with its own bill,
-  # and without this cap the nightly pass works backwards through all of it at
-  # the batch size a night.
-  max-age-days: ${SCOPE_REVIEW_MAX_AGE_DAYS:3}
+  # How far back the nightly pass will look.
+  #
+  # This was three days, to stop the pass working backwards through a corpus of
+  # 1,363 listings nobody had asked it to read. That corpus has since been read
+  # on purpose, in one catch-up, so the guard had nothing left to guard -- and
+  # it had become the hole instead: the listings a removed classifier rule had
+  # been holding at UNKNOWN return to WORLDWIDE on their next fetch, months
+  # after they arrived, and a three-day window would never look at them.
+  #
+  # Effectively no limit now. The mechanism stays because a bulk import could
+  # recreate a backlog overnight, and then it is the difference between a
+  # surprise bill and a deliberate one.
+  max-age-days: ${SCOPE_REVIEW_MAX_AGE_DAYS:3650}
   # Twenty minutes after the ingest, which runs at 04:17.
   cron: ${SCOPE_REVIEW_CRON:0 40 4 * * *}

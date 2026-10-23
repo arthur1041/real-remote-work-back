@@ -71,8 +71,28 @@ public class ScopeReviewer {
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
     private static final Pattern TAGS = Pattern.compile("<[^>]*>");
+    /**
+     * The handful of entities these descriptions actually carry.
+     *
+     * <p>Stripping tags leaves `&nbsp;` behind as the letters "nbsp", which the
+     * model's quote never contains -- so the quote check rejected genuine
+     * restrictions, including "This role will be remote, and based in the
+     * United States". Five listings were put back on the homepage by a guard
+     * meant to protect it.
+     */
+    private static final Pattern ENTITY = Pattern.compile(
+            "&(nbsp|amp|quot|apos|lt|gt|#160|#38|#39|#34|rsquo|lsquo|ldquo|rdquo|mdash|ndash|hellip);",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern SPACES = Pattern.compile("\\s+");
-    private static final Pattern NOT_ALNUM = Pattern.compile("[^a-z0-9]+");
+    /**
+     * Everything that is not a letter or a digit, in any script.
+     *
+     * <p>`[^a-z0-9]` deleted Japanese and Chinese outright, so a quote in
+     * either normalised to an empty string and was refused as too short. One
+     * of them read "この職務は日本を拠点とし" -- this role is based in Japan.
+     */
+    private static final Pattern NOT_ALNUM =
+            Pattern.compile("[^\\p{L}\\p{N}]+", Pattern.UNICODE_CHARACTER_CLASS);
 
     /**
      * What the model is asked.
@@ -321,7 +341,9 @@ public class ScopeReviewer {
             }
             cleaned = cleaned.substring(m.end());
         }
-        return SPACES.matcher(TAGS.matcher(cleaned).replaceAll(" ")).replaceAll(" ").trim();
+        String noTags = TAGS.matcher(cleaned).replaceAll(" ");
+        String decoded = ENTITY.matcher(noTags).replaceAll(" ");
+        return SPACES.matcher(decoded).replaceAll(" ").trim();
     }
 
     private Verdict ask(String title, String text) {
@@ -438,7 +460,10 @@ public class ScopeReviewer {
             return false;
         }
         String needle = NOT_ALNUM.matcher(quote.toLowerCase()).replaceAll("");
-        if (needle.length() < 12) {
+        // Eight, not twelve. The floor exists to reject a fragment that would
+        // match half the corpus, and in Japanese or Chinese eight characters
+        // is a whole clause rather than two words.
+        if (needle.length() < 8) {
             return false;
         }
         return NOT_ALNUM.matcher(text.toLowerCase()).replaceAll("").contains(needle);
