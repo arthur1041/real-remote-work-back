@@ -140,6 +140,11 @@ create index candidate_resumes_by_candidate on candidate_resumes (candidate_id, 
 -- same place they always did, and the route decides whether that means a
 -- redirect outwards or a form. Nothing downstream had to learn a new shape.
 -- ============================================================================
+-- Null for a role that takes applications here: before approval there is no
+-- job row and therefore no /jobs/<id>/apply to point at, and inventing an
+-- external URL to satisfy the column would put a lie on the review screen.
+alter table employer_postings alter column apply_url drop not null;
+
 alter table employer_postings
     add column apply_via_platform boolean not null default false,
     -- Which fields the employer wants asked, from a fixed catalogue the web app
