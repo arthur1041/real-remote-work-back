@@ -167,7 +167,13 @@ scope-review:
   # answers NOT_FOUND for every model name.
   location: ${SCOPE_REVIEW_LOCATION:global}
   model: ${SCOPE_REVIEW_MODEL:gemini-3.1-flash-lite}
-  batch-size: ${SCOPE_REVIEW_BATCH:60}
+  # Doubled from 60. The figure used to decide, in effect, which listings were
+  # ever read at all: the pass took the batch newest-first out of a ten-year
+  # window, so anything behind one night's arrivals was skipped every night
+  # forever. The order is oldest-first now, so this only governs how fast a
+  # backlog drains -- and at ~27 worldwide arrivals a day against a bill of
+  # cents a month, the headroom is free.
+  batch-size: ${SCOPE_REVIEW_BATCH:120}
   # How far back the nightly pass will look.
   #
   # This was three days, to stop the pass working backwards through a corpus of
@@ -181,5 +187,27 @@ scope-review:
   # recreate a backlog overnight, and then it is the difference between a
   # surprise bill and a deliberate one.
   max-age-days: ${SCOPE_REVIEW_MAX_AGE_DAYS:3650}
+  # The date this pass went live. Everything first seen after it is in scope
+  # permanently; anything before it is the historical corpus. It is the anchored
+  # alternative to max-age-days above, and with that set wide open it does
+  # nothing -- it exists so that narrowing the age limit cannot re-open the hole
+  # where a listing is skipped forever.
+  corpus-floor: ${SCOPE_REVIEW_CORPUS_FLOOR:2026-10-23}
   # Twenty minutes after the ingest, which runs at 04:17.
   cron: ${SCOPE_REVIEW_CRON:0 40 4 * * *}
+
+# The CV retention sweep.
+#
+# A candidate who deletes their account has every document no application points
+# at destroyed on the spot; the ones an employer was actually sent go on a
+# ninety-day clock instead. This is the clock. The work happens in the web
+# process because that is where the bucket credentials are and the only place
+# they should be -- see ResumeRetentionJob for why that beat holding a second
+# copy of them here.
+#
+# Inert without a token: no INTERNAL_TASK_TOKEN means nothing is called and the
+# documents wait, which is the right direction to fail in for a deletion.
+retention:
+  web-url: ${RETENTION_WEB_URL:http://web:3000}
+  token: ${INTERNAL_TASK_TOKEN:}
+  cron: ${RETENTION_CRON:0 20 3 * * *}

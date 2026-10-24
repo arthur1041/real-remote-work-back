@@ -6,6 +6,9 @@ import com.remoteroles.pipeline.normalize.ScopeReviewer;
 import com.remoteroles.pipeline.repo.JobRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import com.remoteroles.pipeline.newsletter.AdminLoginCodeSender;
+import com.remoteroles.pipeline.newsletter.ApplicationSender;
+import com.remoteroles.pipeline.newsletter.CandidatePasswordResetSender;
 import com.remoteroles.pipeline.newsletter.ConfirmationSender;
 import com.remoteroles.pipeline.newsletter.DigestSender;
 import com.remoteroles.pipeline.newsletter.EmailVerificationSender;
@@ -39,6 +42,9 @@ public class AdminController {
     private final ReviewAlerter reviews;
     private final PostingDecisionSender decisions;
     private final EmailVerificationSender verifications;
+    private final ApplicationSender applications;
+    private final CandidatePasswordResetSender candidateResets;
+    private final AdminLoginCodeSender adminCodes;
     // Conditional on its own switch, so it may genuinely be absent. An
     // ObjectProvider is the difference between a preview that reports one
     // template missing and a service that refuses to start.
@@ -54,6 +60,9 @@ public class AdminController {
     public AdminController(DigestSender digest, InviteSender invites, ReviewAlerter reviews,
                            PostingDecisionSender decisions,
                            EmailVerificationSender verifications,
+                           ApplicationSender applications,
+                           CandidatePasswordResetSender candidateResets,
+                           AdminLoginCodeSender adminCodes,
                            ObjectProvider<ConfirmationSender> confirmations,
                            ObjectProvider<ScopeReviewer> scopeReviewer,
                            MailBudget budget,
@@ -68,6 +77,9 @@ public class AdminController {
         this.reviews = reviews;
         this.decisions = decisions;
         this.verifications = verifications;
+        this.applications = applications;
+        this.candidateResets = candidateResets;
+        this.adminCodes = adminCodes;
         this.confirmations = confirmations;
         this.scopeReviewer = scopeReviewer;
     }
@@ -241,6 +253,28 @@ public class AdminController {
             verifications.sendPreview(to);
             budget.record(MailBudget.Tier.TRANSACTIONAL);
             result.put("verification", "sent");
+        }
+
+        // The three added when the candidate side and the admin gate got the
+        // messages they shipped without. Previewable for the same reason the
+        // others are: these are read by people who are mid-task and stuck, so
+        // the wording is the feature and it has to be looked at before it goes.
+        if (wanted(only, "application")) {
+            applications.sendPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
+            result.put("application", "sent");
+        }
+
+        if (wanted(only, "candidateReset")) {
+            candidateResets.sendPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
+            result.put("candidateReset", "sent");
+        }
+
+        if (wanted(only, "adminLoginCode")) {
+            adminCodes.sendPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
+            result.put("adminLoginCode", "sent");
         }
 
         if (result.isEmpty()) {

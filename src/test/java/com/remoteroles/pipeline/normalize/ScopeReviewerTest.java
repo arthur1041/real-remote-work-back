@@ -154,4 +154,53 @@ class ScopeReviewerTest {
                     "two words match half the corpus and prove nothing");
         }
     }
+
+    /**
+     * The error message, which used to destroy itself.
+     *
+     * <p>Worth a test rather than a careful read, because the bug was invisible
+     * in exactly the situation it mattered: it only throws when the body's
+     * whitespace collapses it below the 200-character bound, which is every
+     * pretty-printed JSON error Google returns, and the throw was swallowed by
+     * the handler around the call. The visible symptom was
+     * `job_scope_review.error` reading "StringIndexOutOfBoundsException" for a
+     * quota refusal, an expired key and a dead endpoint alike.
+     */
+    @Nested
+    @DisplayName("the recorded error")
+    class Brief {
+
+        @Test
+        @DisplayName("survives a body that collapses below the cut, which is every Google error")
+        void survivesCollapsingWhitespace() {
+            // 319 characters as sent, 58 once the newlines and indentation go.
+            // The old expression asked for substring(0, 200) of the 58.
+            String body = """
+                    {
+                      "error": {
+                        "code": 429,
+                        "message": "Quota exceeded"
+                      }
+                    }
+                    """ + " ".repeat(250);
+
+            String brief = ScopeReviewer.brief(body);
+            assertTrue(brief.contains("429"), "the status the operator needs is the whole point");
+            assertTrue(brief.contains("Quota exceeded"));
+            assertFalse(brief.contains("\n"), "one line, so it reads in a log and a column");
+        }
+
+        @Test
+        @DisplayName("cuts a genuinely long body at 200")
+        void cutsLongBodies() {
+            assertEquals(200, ScopeReviewer.brief("x".repeat(5_000)).length());
+        }
+
+        @Test
+        @DisplayName("says nothing rather than throwing on no body at all")
+        void toleratesNull() {
+            assertEquals("", ScopeReviewer.brief(null));
+            assertEquals("", ScopeReviewer.brief("   \n  "));
+        }
+    }
 }
