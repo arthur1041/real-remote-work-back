@@ -10,6 +10,7 @@ import com.remoteroles.pipeline.newsletter.AdminLoginCodeSender;
 import com.remoteroles.pipeline.newsletter.ApplicationSender;
 import com.remoteroles.pipeline.newsletter.CandidatePasswordResetSender;
 import com.remoteroles.pipeline.newsletter.ConfirmationSender;
+import com.remoteroles.pipeline.newsletter.CvRequestSender;
 import com.remoteroles.pipeline.newsletter.DigestSender;
 import com.remoteroles.pipeline.newsletter.EmailVerificationSender;
 import com.remoteroles.pipeline.newsletter.InviteSender;
@@ -45,6 +46,7 @@ public class AdminController {
     private final ApplicationSender applications;
     private final CandidatePasswordResetSender candidateResets;
     private final AdminLoginCodeSender adminCodes;
+    private final CvRequestSender cvRequests;
     // Conditional on its own switch, so it may genuinely be absent. An
     // ObjectProvider is the difference between a preview that reports one
     // template missing and a service that refuses to start.
@@ -63,6 +65,7 @@ public class AdminController {
                            ApplicationSender applications,
                            CandidatePasswordResetSender candidateResets,
                            AdminLoginCodeSender adminCodes,
+                           CvRequestSender cvRequests,
                            ObjectProvider<ConfirmationSender> confirmations,
                            ObjectProvider<ScopeReviewer> scopeReviewer,
                            MailBudget budget,
@@ -80,6 +83,7 @@ public class AdminController {
         this.applications = applications;
         this.candidateResets = candidateResets;
         this.adminCodes = adminCodes;
+        this.cvRequests = cvRequests;
         this.confirmations = confirmations;
         this.scopeReviewer = scopeReviewer;
     }
@@ -275,6 +279,17 @@ public class AdminController {
             adminCodes.sendPreview(to);
             budget.record(MailBudget.Tier.TRANSACTIONAL);
             result.put("adminLoginCode", "sent");
+        }
+
+        // The only one on this list a reader did not ask for a second earlier,
+        // which makes it the only one whose wording is weighed by a filter
+        // rather than merely read by a person. Previewing it is not a nicety:
+        // it is how the words get looked at before they are sent to somebody
+        // who is under no obligation to be patient with them.
+        if (wanted(only, "cvRequest")) {
+            cvRequests.sendPreview(to);
+            budget.record(MailBudget.Tier.COLD);
+            result.put("cvRequest", "sent");
         }
 
         if (result.isEmpty()) {
