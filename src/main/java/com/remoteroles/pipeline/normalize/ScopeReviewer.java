@@ -104,6 +104,20 @@ public class ScopeReviewer {
      * Sales" is the territory the job covers, not where the worker must live,
      * which is the same distinction {@link RuleBasedLocationClassifier} already
      * documents for titles.
+     *
+     * <p>The costliest entry is the one about the clock, added after an audit
+     * of the 478 listings this pass had taken off the homepage: 69 of them --
+     * one in seven -- were demoted for nothing but a working-hours or overlap
+     * sentence. "Schedule: Mon-Fri 07.00-16.00 CST", "four hours of daily
+     * overlap with US Eastern business hours", "Time zone: EST" alongside
+     * office hours. The earlier wording invited it, because it put "must be
+     * within particular time zones" in the contradicting list with no mention
+     * of hours, and a schedule in a named zone reads exactly like a band a
+     * person must sit in. It is not: somebody in Manila can keep EST hours,
+     * and {@link RuleBasedLocationClassifier} has always agreed -- it keeps
+     * WORLDWIDE when it finds a timezone and records it in
+     * `timezone_requirement`, which the listing page shows beside the scope.
+     * A zone is a gate here only where the posting puts the PERSON in it.
      */
     private static final String PROMPT = """
             You check job postings for one specific thing.
@@ -113,8 +127,13 @@ public class ScopeReviewer {
 
             It CONTRADICTS if the text says the person must live in, reside in, be located
             in, be based in, or be legally able to work in a particular country, region,
-            state, province or city -- or must be within particular time zones -- in order
-            to hold the job.
+            state, province or city, in order to hold the job.
+
+            A time zone contradicts the tag only when the posting puts the PERSON inside
+            it -- "located in CET timezone (+/- 3 hours)", "you must be based in the EU
+            timezone", "your main location must be between UTC-4 and UTC+4", "open to
+            candidates based anywhere within European timezones". A time zone used to say
+            when the work happens does not; see the clock entry below.
 
             It does NOT contradict for any of these:
             - a company headquarters or office address
@@ -123,7 +142,25 @@ public class ScopeReviewer {
             - legal boilerplate about work authorisation "in the country where you apply"
             - benefits available only to employees in one country
             - an equal-opportunity or privacy notice naming a jurisdiction
-            - a preference, a "nice to have", or overlap that is merely encouraged
+            - a preference, a "nice to have", or overlap that is merely encouraged. The
+              words that mark one: "preferred", "ideally", "a plus", "a bonus", "nice to
+              have", "we'd love". "Remote - Anywhere (American timezones preferred)",
+              "ideally your timezone is within +/- 4 hours of GMT", "Location Global
+              (LATAM preferred)" are all open roles with a wish attached.
+            - WORKING HOURS. A shift, a schedule, core hours, an overlap requirement, or
+              availability expressed in somebody's time zone says WHEN the person works,
+              never WHERE they live. "Our standard working hours are 8 a.m.-5 p.m. US
+              Eastern Time", "Schedule: Mon-Fri 07.00-16.00 CST", "at least 4 hours of
+              daily overlap with US Eastern business hours", "available during office
+              hours in CET time zone", a "Time zone: Central Standard Time (CST)" line
+              among the job's details or next to its office hours,
+              "European timezone availability", "a CET schedule" -- somebody in Manila
+              can keep any of them. This holds however hard the sentence sounds ("must",
+              "required", "a hard requirement") and however many hours of overlap are
+              demanded: seven hours of overlap with a 9-5 is a demand on the clock, not
+              on the map. It holds for the team's hours too -- "our team operates within
+              EU timezones", "a team is based in a single time zone, such as EMEA or
+              APAC" -- which is where colleagues sit, on a clock.
             - the territory, market or customers the job covers. "Head of West Coast
               Sales", "EMEA Account Executive", "scale our LATAM region" describe the work,
               not where the worker must live. Only a sentence about the PERSON counts.
@@ -140,13 +177,25 @@ public class ScopeReviewer {
               already in NYC, not a requirement to be one.
 
             Ask yourself: does this sentence say where the PERSON has to be? If it says
-            where the work points, the money comes from, or the company sits, it does not
-            count.
+            where the work points, the money comes from, the company sits, or what hours
+            the person keeps, it does not count. Where somebody must BE is a restriction;
+            when somebody must be WORKING is not.
+
+            One kind of sentence settles it on its own. Where the posting says the person
+            may live anywhere -- "Candidates may be located anywhere", "Location: Global",
+            "we welcome candidates globally", "available across all countries", "we don't
+            mind where you're located" -- the answer is false, whatever the rest of that
+            same sentence asks of the clock. "Candidates may be located anywhere with
+            working hours compatible with Eastern Time" is a posting saying anywhere.
+
+            A placeholder nobody filled in names nowhere: "a remote position based out of
+            (locality)", "based in [City]". So does a pointer to a list you cannot see:
+            "check that your country appears on this page".
 
             "place" must be a NAMED country, region, state, province, city or time zone --
             "Germany", "EMEA", "Ontario", "CET". If you cannot name one, the answer is false:
-            "their country", "country of employment", "wherever you live" name nothing and
-            restrict nobody.
+            "their country", "country of employment", "wherever you live", "a compatible
+            time zone", "a single major time zone" name nothing and restrict nobody.
 
             Answer with JSON only, no other text:
             {"restricted": true|false, "place": "<the place, or null>", "quote": "<the exact sentence from the posting that decides it, or null>"}
@@ -633,11 +682,43 @@ public class ScopeReviewer {
         String p = place.toLowerCase();
         return !p.contains("country of employment")
                 && !p.contains("wherever")
-                && !GENERIC_PLACE.matcher(p).find();
+                && !GENERIC_PLACE.matcher(p).find()
+                && properNoun(place);
+    }
+
+    /**
+     * Whether the answer is written the way a place is written.
+     *
+     * <p>A place is a proper noun and comes back capitalised -- "Germany", "EMEA",
+     * "CET", "British Columbia". A category does not. Every one of the 14 answers
+     * in the stored corpus with no capital letter in it was a category: "a single
+     * major time zone", "a specific list of countries", "the specified country",
+     * "the locations mentioned", "eligible locations", "state". Not one was
+     * somewhere a person could be refused for not living in, and four of them had
+     * taken a listing off the homepage.
+     *
+     * <p>Capitalisation is not a property of every writing system, so a place with
+     * a letter outside the Latin script passes on that alone -- "日本" is a country
+     * and has no case at all. Refusing it would be the `[^a-z0-9]` mistake again,
+     * which is documented on {@link #NOT_ALNUM}.
+     */
+    private static boolean properNoun(String place) {
+        boolean upper = false;
+        boolean nonLatin = false;
+        for (int i = 0; i < place.length(); i++) {
+            char c = place.charAt(i);
+            if (Character.isUpperCase(c)) {
+                upper = true;
+            } else if (Character.isLetter(c) && c > 0x24F) {
+                nonLatin = true;
+            }
+        }
+        return upper || nonLatin;
     }
 
     private static final Pattern GENERIC_PLACE = Pattern.compile(
             "\\b(their|your|his|her|the)\\s+(own\\s+)?(country|location|region|area|state)\\b");
+
 
     static boolean quoted(String quote, String text) {
         if (quote == null) {

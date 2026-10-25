@@ -88,6 +88,33 @@ class ScopeReviewerTest {
         }
 
         @Test
+        @DisplayName("rejects a category written where a place belongs")
+        void rejectsHedged() {
+            // All of these are answers the model actually gave, found in the
+            // 25 Oct audit. None names somewhere a person could be refused for
+            // not living in, and four of them had taken a listing off the
+            // homepage. What they share is that none is capitalised.
+            assertFalse(ScopeReviewer.named("a single major time zone"));
+            assertFalse(ScopeReviewer.named("a specific list of countries"));
+            assertFalse(ScopeReviewer.named("the specified country"));
+            assertFalse(ScopeReviewer.named("the locations mentioned"));
+            assertFalse(ScopeReviewer.named("eligible locations"));
+            assertFalse(ScopeReviewer.named("compatible time zone"));
+        }
+
+        @Test
+        @DisplayName("keeps a place whose script has no capitals")
+        void keepsNonLatin() {
+            // Japanese and Chinese have no letter case at all. Reading the
+            // absence of a capital as the absence of a place would refuse the
+            // whole of two languages -- the same mistake `[^a-z0-9]` made on
+            // the quote check, which cost a posting reading "this role is based
+            // in Japan".
+            assertTrue(ScopeReviewer.named("日本"));
+            assertTrue(ScopeReviewer.named("中国"));
+        }
+
+        @Test
         @DisplayName("rejects an absent place")
         void rejectsMissing() {
             assertFalse(ScopeReviewer.named(null));
