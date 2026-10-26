@@ -207,6 +207,25 @@ scope-review:
 #
 # Inert without a token: no INTERNAL_TASK_TOKEN means nothing is called and the
 # documents wait, which is the right direction to fail in for a deletion.
+# Revisão prioritária das vagas de empregador pagante. Ver decisão 4 de
+# docs/plano-starter.md e a classe PostingReviewer.
+#
+# Desligado por padrão, e inerte sem o token mesmo quando ligado: sem
+# INTERNAL_TASK_TOKEN a chamada nunca é feita e a vaga espera uma pessoa, que é
+# o que acontecia antes desta classe existir. A chave de serviço é a mesma do
+# scope-review; não há segunda credencial.
+posting-review:
+  enabled: ${POSTING_REVIEW_ENABLED:false}
+  key-file: ${POSTING_REVIEW_KEY_FILE:${SCOPE_REVIEW_KEY_FILE:}}
+  project: ${POSTING_REVIEW_PROJECT:${SCOPE_REVIEW_PROJECT:actually-remote}}
+  location: ${POSTING_REVIEW_LOCATION:global}
+  model: ${POSTING_REVIEW_MODEL:gemini-3.1-flash-lite}
+  web-url: ${POSTING_REVIEW_WEB_URL:http://web:3000}
+  token: ${INTERNAL_TASK_TOKEN:}
+  # Um minuto, porque "em minutos" é o que a página de preços promete.
+  interval-ms: ${POSTING_REVIEW_INTERVAL_MS:60000}
+  batch-size: ${POSTING_REVIEW_BATCH:10}
+
 retention:
   web-url: ${RETENTION_WEB_URL:http://web:3000}
   token: ${INTERNAL_TASK_TOKEN:}
