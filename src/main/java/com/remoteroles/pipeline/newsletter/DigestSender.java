@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -64,6 +65,56 @@ public class DigestSender {
 
     record Role(long id, String title, String company, String location) {}
 
+    /**
+     * The slice of the paid list that one reader is sent.
+     *
+     * <p>**This is what makes the block scale with customers instead of
+     * rationing them.** The first design gave the issue five sold places and
+     * rotated roles through them, so with a hundred paying roles the one at
+     * the back of the queue waited twenty weeks — a feature that is sold today
+     * and delivered next season. Here the five places are *per reader*: with
+     * 790 subscribers the issue has about 3,950 of them, every paid role goes
+     * out in every issue, and what differs between two readers is which five
+     * they get.
+     *
+     * <p>Arithmetic rather than randomness, so the same issue sent twice is
+     * the same issue, and so this can be tested. The ring is walked from an
+     * offset made of the reader and the issue: the reader spreads the roles
+     * across the audience, and the issue moves everybody along next week so
+     * the same reader is not sent the same five for ever.
+     *
+     * <p>When there are fewer paid roles than places, everybody gets all of
+     * them and the slice is the whole list — which is the case on the day the
+     * first customer subscribes, and the case this has to be right for first.
+     */
+    static List<Role> sliceFor(List<Role> paid, int slots, long recipientId, long issueId) {
+        if (paid.isEmpty() || paid.size() <= slots) return paid;
+
+        List<Role> out = new ArrayList<>(slots);
+        // floorMod, not %: an id is never negative today, and a negative
+        // offset here would throw on the first one that was.
+        int start = (int) Math.floorMod(recipientId * 31 + issueId, paid.size());
+        for (int i = 0; i < slots; i++) {
+            out.add(paid.get((start + i) % paid.size()));
+        }
+        return out;
+    }
+
+    /**
+     * How many sold places one reader's email can carry, as a share of the
+     * editorial list rather than a number of its own.
+     *
+     * <p>A third. The ratio is the point: a reader has to be able to see at a
+     * glance that the paid block is the smaller part of what they were sent,
+     * or the labelling is technically true and practically a pretence. Writing
+     * it as a fraction means the two stay in proportion if the issue ever
+     * carries more roles, instead of a constant that silently becomes half the
+     * email the day `max-jobs` is raised.
+     */
+    static int paidSlots(int editorialSize) {
+        return Math.max(1, editorialSize / 3);
+    }
+
     /** What the admin area last saved. Read fresh on every wake-up. */
     record Settings(boolean enabled, int intervalHours, String audience, int minJobs, int maxJobs) {}
 
@@ -122,6 +173,10 @@ public class DigestSender {
         }
 
         List<Role> roles = newWorldwideRoles(since, config.maxJobs());
+        // Capped well below the organic list on purpose. A sold block that can
+        // grow to the size of the editorial one stops being a block inside the
+        // email and becomes the email.
+        List<Role> paid = paidRoles(since, roles);
 
         // An empty or nearly empty issue is worse than no issue: it spends the
         // one habit that matters, which is that opening this is worth doing.
@@ -152,6 +207,7 @@ public class DigestSender {
                 .query(Long.class)
                 .single();
 
+        int slots = paidSlots(roles.size());
         int sent = 0;
         for (SubscriberRepository.Recipient person : audience) {
             if (!budget.claim(MailBudget.Tier.TRANSACTIONAL)) {
@@ -160,8 +216,10 @@ public class DigestSender {
                 break;
             }
             subscribers.markDigestSent(person.id());
+            // Each reader's own slice of the paid list. See sliceFor.
+            List<Role> theirs = sliceFor(paid, slots, person.id(), issueId);
             mailer.send(person.email(), subject(roles.size()),
-                    body(roles, person), html(roles, person),
+                    body(roles, theirs, person), html(roles, theirs, person),
                     oneClickUnsubscribe(person.unsubscribeToken()));
             sent++;
         }
@@ -178,7 +236,15 @@ public class DigestSender {
                     .update();
         }
 
-        log.info("digest sent: {} roles to {} recipients", roles.size(), sent);
+        // Recorded once the issue has gone out, for every paid role in it --
+        // which under slicing is all of them. It is what the employer's
+        // dashboard reads to say when their role last went out.
+        markFeatured(paid);
+
+        log.info("digest sent: {} roles to {} recipients; {} paid roles, {} of them per reader, "
+                + "about {} readers each",
+                roles.size(), sent, paid.size(), Math.min(slots, paid.size()),
+                paid.isEmpty() ? 0 : (long) sent * Math.min(slots, paid.size()) / paid.size());
         return sent;
     }
 
@@ -216,6 +282,93 @@ public class DigestSender {
     }
 
     /**
+     * Roles from employers on a paid plan, for the section that says so.
+     *
+     * <p>**This is paid placement and the email calls it that.** The digest
+     * carries the 15 newest worldwide roles out of roughly 160 that arrive in
+     * a week, so a place in it is scarce and is otherwise decided by nothing
+     * but arrival time. Selling one is therefore buying attention, and the
+     * only honest way to sell it is in a section a reader can see is sold --
+     * which is why it is separate, labelled, and capped rather than mixed into
+     * the list above it.
+     *
+     * <p>Nothing else about these roles is different: same worldwide-only
+     * rule, same confidence floor, same person or model reading them before
+     * they were published, and the same place in the feed on the site. The
+     * only thing bought is this block.
+     *
+     * <p>`expires_at` rather than `status` alone, which is the rule
+     * `employer_subscriptions` states in its own comment: a row marked ACTIVE
+     * whose date has passed grants nothing.
+     *
+     * <p>Excludes anything already in the list above, because paying for a
+     * place is not paying to appear twice.
+     *
+     * <p>**Every eligible role, not a page of them.** What each reader is sent
+     * is a slice of this list; see {@link #sliceFor}.
+     */
+    private List<Role> paidRoles(Instant since, List<Role> already) {
+        List<Long> seen = already.stream().map(Role::id).toList();
+        return db.sql("""
+                        select j.id, j.title, c.name as company,
+                               coalesce(j.location_raw, 'Anywhere in the World') as location
+                        from jobs j
+                        join companies c on c.id = j.company_id
+                        join employers e on e.company_id = c.id
+                        join employer_subscriptions s on s.employer_id = e.id
+                        where j.closed_at is null
+                          and j.is_remote is true
+                          and j.geo_scope = 'WORLDWIDE'
+                          and j.classification_confidence >= 0.5
+                          and j.first_seen_at > :since
+                          and s.status = 'ACTIVE'
+                          and s.expires_at > now()
+                          and (:none or not (j.id = any(:seen)))
+                        -- Longest wait first: never featured before anything
+                        -- that has, then oldest appearance. This is the whole
+                        -- rotation, and it is what lets the pricing page say
+                        -- "your roles appear in the weekly email" rather than
+                        -- "may appear".
+                        -- A stable order, not a priority one. Every eligible
+                        -- role goes out in this issue; what this decides is
+                        -- only where each sits in the ring that the slices are
+                        -- cut from, and it has to be the same for every
+                        -- recipient of the same issue or the slices overlap
+                        -- unevenly.
+                        order by j.id
+                        """)
+                .param("since", Timestamp.from(since))
+                // An empty array parameter is not portable through every driver
+                // path here, so the "nothing to exclude" case is a flag rather
+                // than an array that happens to be empty.
+                .param("none", seen.isEmpty())
+                .param("seen", seen.toArray(new Long[0]))
+                .query((rs, n) -> new Role(
+                        rs.getLong("id"),
+                        rs.getString("title"),
+                        rs.getString("company"),
+                        rs.getString("location")))
+                .list();
+    }
+
+    /**
+     * Remembers which paid roles this issue carried, so the next one takes
+     * somebody else.
+     *
+     * <p>**After the sending, not before**, so an issue that was never sent
+     * does not claim to have carried anything. It is read by the employer's
+     * dashboard to answer "did my role go out", which is the only question
+     * this date exists to settle -- under slicing every paid role is in every
+     * issue, so it is a record of delivery rather than of a turn.
+     */
+    private void markFeatured(List<Role> featured) {
+        if (featured.isEmpty()) return;
+        db.sql("update jobs set digest_featured_at = now() where id = any(:ids)")
+                .param("ids", featured.stream().map(Role::id).toArray(Long[]::new))
+                .update();
+    }
+
+    /**
      * Where the List-Unsubscribe header points.
      *
      * <p>The body already carries an opt-out link; the provider cannot see it.
@@ -240,7 +393,7 @@ public class DigestSender {
      * seconds by someone deciding whether to click one thing, and the shape that
      * survives every mail client is the one that also survives spam filtering.
      */
-    private String body(List<Role> roles, SubscriberRepository.Recipient person) {
+    private String body(List<Role> roles, List<Role> paid, SubscriberRepository.Recipient person) {
         StringBuilder list = new StringBuilder();
         for (Role role : roles) {
             list.append("  %s — %s\n     %s/jobs/%d\n\n"
@@ -250,12 +403,28 @@ public class DigestSender {
         String unsubscribe = "%s/unsubscribe?token=%s"
                 .formatted(siteUrl, URLEncoder.encode(person.unsubscribeToken(), StandardCharsets.UTF_8));
 
+        StringBuilder sold = new StringBuilder();
+        if (!paid.isEmpty()) {
+            // Said before the roles, not after them. A label a reader meets
+            // once they have already read the list is a disclosure that
+            // arrives too late to be one.
+            sold.append("PAID PLACEMENT — these employers pay for a place in this email.\n")
+                .append("Nothing else about them is different: the same worldwide-only rule,\n")
+                .append("the same check before publishing, and the same place in the feed on\n")
+                .append("the site, where nothing can be bought.\n\n");
+            for (Role role : paid) {
+                sold.append("  %s — %s\n     %s/jobs/%d\n\n"
+                        .formatted(role.title(), role.company(), siteUrl, role.id()));
+            }
+        }
+
         return """
                 %d roles went up this week with no country restriction at all — \
                 open to anyone, anywhere, as stated by the employer rather than \
                 guessed at from the word "remote".
 
                 %s
+                %s\
                 See everything open worldwide:
 
                 %s
@@ -264,11 +433,12 @@ public class DigestSender {
                 roles. Leave at any time, in one click:
 
                 %s
-                """.formatted(roles.size(), list.toString().stripTrailing() + "\n", siteUrl, unsubscribe);
+                """.formatted(roles.size(), list.toString().stripTrailing() + "\n",
+                        sold.toString(), siteUrl, unsubscribe);
     }
 
     /** The laid-out half: one row per role, the row itself being the link. */
-    private String html(List<Role> roles, SubscriberRepository.Recipient person) {
+    private String html(List<Role> roles, List<Role> paid, SubscriberRepository.Recipient person) {
         String unsubscribe = "%s/unsubscribe?token=%s"
                 .formatted(siteUrl, URLEncoder.encode(person.unsubscribeToken(), StandardCharsets.UTF_8));
 
@@ -282,6 +452,32 @@ public class DigestSender {
                     i == roles.size() - 1));
         }
 
+        /* The sold block, under a label that says what it is.
+           Below the editorial list and never mixed into it, headed with the
+           plain words rather than "featured" or "spotlight" -- a euphemism in
+           this position is the disclosure failing to be one. The sentence
+           under it says what paying did not buy, because that is the part a
+           reader has no way of checking and the part this board is sold on. */
+        StringBuilder sold = new StringBuilder();
+        if (!paid.isEmpty()) {
+            StringBuilder paidRows = new StringBuilder();
+            for (int i = 0; i < paid.size(); i++) {
+                Role role = paid.get(i);
+                paidRows.append(EmailLayout.roleRow(
+                        role.title(),
+                        role.company(),
+                        "%s/jobs/%d".formatted(siteUrl, role.id()),
+                        i == paid.size() - 1));
+            }
+            sold.append(EmailLayout.eyebrow("Paid placement"))
+                .append(EmailLayout.paragraph(
+                        "These employers pay for a place in this email. Nothing else about "
+                                + "them is different: the same worldwide-only rule, the same "
+                                + "check before publishing, and the same place in the feed on "
+                                + "the site, where nothing can be bought."))
+                .append(EmailLayout.roleList(paidRows.toString()));
+        }
+
         String card = EmailLayout.eyebrow("This week")
                 + EmailLayout.heading("%d new roles open worldwide".formatted(roles.size()))
                 + EmailLayout.paragraph(
@@ -290,6 +486,7 @@ public class DigestSender {
                                 + "&ldquo;remote&rdquo;.",
                         true)
                 + EmailLayout.roleList(rows.toString())
+                + sold
                 + EmailLayout.button(siteUrl, "See everything open worldwide");
 
         return EmailLayout.document(
@@ -314,9 +511,15 @@ public class DigestSender {
         // A year back and capped, so a preview has roles in it whatever the week
         // happened to bring. The real issue uses the window since the last one.
         List<Role> roles = newWorldwideRoles(Instant.now().minus(365, ChronoUnit.DAYS), 8);
+        // The sold block over the same window, so a preview shows the email as
+        // a subscriber would actually receive it -- including the part that is
+        // paid for, which is the part most worth looking at before it goes out.
+        List<Role> paid = sliceFor(
+                paidRoles(Instant.now().minus(365, ChronoUnit.DAYS), roles),
+                paidSlots(roles.size()), 0, 0);
         SubscriberRepository.Recipient person =
                 new SubscriberRepository.Recipient(0, to, "preview-token");
         mailer.send(to, "[preview] " + subject(roles.size()),
-                body(roles, person), html(roles, person));
+                body(roles, paid, person), html(roles, paid, person));
     }
 }
