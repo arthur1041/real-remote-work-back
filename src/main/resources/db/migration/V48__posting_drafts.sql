@@ -17,12 +17,20 @@
 -- esquecesse colocaria um formulário vazio na fila de revisão de uma pessoa,
 -- ou no board.
 --
--- **Um rascunho por empregador, e a chave primária diz isso.** O fluxo que
--- ele atende é "abri o formulário, preenchi metade, fechei o navegador" --
--- e, quando se volta, não existe ambiguidade sobre qual retomar. Duas abas
--- do mesmo empregador escrevendo ao mesmo tempo terminam com a última a
--- gravar, que é o comportamento de qualquer rascunho salvo sozinho e o que
--- as duas abas já faziam entre si antes disto existir.
+-- **Vários por empregador.** A primeira versão tinha `employer_id` como
+-- chave primária, um rascunho cada. Isso obrigava a inventar uma regra para
+-- o caso de começar uma segunda vaga com a primeira pela metade -- e toda
+-- resposta possível era ruim: sobrescrever joga trabalho fora sem perguntar,
+-- e recusar impede de escrever duas vagas na mesma semana. Com `id` próprio
+-- a pergunta deixa de existir, e os rascunhos entram na listagem do painel
+-- ao lado das vagas, com filtro próprio, que é onde alguém vai procurá-los.
+--
+-- O teto de dez está na aplicação e não aqui, porque é regra de produto e
+-- muda sem migração. Existe porque este endpoint é alcançável por qualquer
+-- conta e uma tabela sem limite nenhum é disco de outra pessoa.
+--
+-- Duas abas no mesmo rascunho continuam terminando com a última a gravar,
+-- que é o que qualquer rascunho salvo sozinho faz.
 --
 -- **`jsonb` e não colunas.** Isto é o estado de um formulário, não uma
 -- entidade: nada aqui é consultado, agregado ou juntado com outra coisa, e o
@@ -36,14 +44,20 @@
 -- ============================================================================
 
 create table employer_posting_drafts (
-    employer_id bigint primary key references employers (id) on delete cascade,
+    id          bigserial primary key,
+    employer_id bigint      not null references employers (id) on delete cascade,
     payload     jsonb       not null default '{}'::jsonb,
+    created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()
 );
 
+-- Como a listagem lê: os rascunhos de um empregador, o mais recente primeiro.
+create index employer_posting_drafts_by_employer
+    on employer_posting_drafts (employer_id, updated_at desc);
+
 comment on table employer_posting_drafts is
-    'O formulário de nova vaga enquanto é preenchido. Um por empregador; '
-    'apagado quando a vaga é enviada para revisão.';
+    'O formulário de nova vaga enquanto é preenchido. Apagado quando a vaga '
+    'é enviada para revisão, ou quando o empregador o descarta.';
 
 comment on column employer_posting_drafts.payload is
     'Os campos do formulário como o navegador os mandou. Lido só pelo próprio '
