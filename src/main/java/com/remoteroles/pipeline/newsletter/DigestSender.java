@@ -354,7 +354,10 @@ public class DigestSender {
                                 join employer_subscriptions s
                                   on s.employer_id = ep.employer_id
                                where ep.job_id = j.id
-                                 and s.status = 'ACTIVE'
+                                 -- CANCELLED conta até a data: quem pagou o
+                                 -- mês tem o mês, que é o que a V41 diz e o
+                                 -- que a página da conta já mostrava.
+                                 and s.status in ('ACTIVE', 'CANCELLED')
                                  and s.expires_at > now()
                           )
                           and (:none or not (j.id = any(:seen)))

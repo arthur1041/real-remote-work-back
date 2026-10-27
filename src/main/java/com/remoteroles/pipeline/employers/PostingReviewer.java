@@ -215,7 +215,9 @@ public class PostingReviewer {
                   join employer_subscriptions s on s.employer_id = p.employer_id
                  where p.status = 'PENDING'
                    and p.auto_reviewed_at is null
-                   and s.status = 'ACTIVE'
+                   -- CANCELLED conta até a data (V41): a revisão prioritária
+                   -- vale pelo período pago, não até o dia do cancelamento.
+                   and s.status in ('ACTIVE', 'CANCELLED')
                    and s.expires_at > now()
                  order by p.created_at
                  limit :batch
