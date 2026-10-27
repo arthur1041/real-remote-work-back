@@ -60,7 +60,28 @@ public class PostingDecisionSender {
      * @param note  what the moderator wrote, which only a rejection carries
      */
     record Decided(long id, String email, String title, String company,
-                   boolean approved, Long jobId, String note) {}
+                   String contact, boolean approved, Long jobId, String note) {}
+
+    /**
+     * How the message opens, or nothing at all.
+     *
+     * <p>This email had no greeting: it began with the role's own title,
+     * which reads as a system announcing an outcome. A board whose whole
+     * claim is that a person read the posting can afford one line that sounds
+     * like one.
+     *
+     * <p>Empty rather than "Hi ," on the accounts made before the name was
+     * asked for. A greeting with a hole in it is worse than none, and the
+     * paragraph below it stands on its own either way.
+     */
+    private static String greeting(Decided row) {
+        String name = row.contact();
+        if (name == null || name.isBlank()) return "";
+        // First word only. Somebody who typed their full name is not expecting
+        // to be greeted with all of it.
+        String first = name.trim().split("\\s+")[0];
+        return "Hi %s,%n%n".formatted(first);
+    }
 
     @Scheduled(cron = "${employer.decision-notice.cron:*/15 * * * * *}")
     public void run() {
@@ -74,7 +95,7 @@ public class PostingDecisionSender {
         }
 
         List<Decided> waiting = db.sql("""
-                        select p.id, e.email, p.title, e.company_name, p.status,
+                        select p.id, e.email, p.title, e.company_name, e.contact_name, p.status,
                                p.job_id, coalesce(p.review_note, '') as review_note
                           from employer_postings p
                           join employers e on e.id = p.employer_id
@@ -88,6 +109,7 @@ public class PostingDecisionSender {
                         rs.getString("email"),
                         rs.getString("title"),
                         rs.getString("company_name"),
+                        rs.getString("contact_name"),
                         "APPROVED".equals(rs.getString("status")),
                         rs.getObject("job_id") == null ? null : rs.getLong("job_id"),
                         rs.getString("review_note")))
@@ -144,7 +166,7 @@ public class PostingDecisionSender {
      */
     private String body(Decided row) {
         if (row.approved()) {
-            return """
+            return greeting(row) + """
                     %s is published and anyone can find it now:
 
                     %s
@@ -160,7 +182,7 @@ public class PostingDecisionSender {
                     """.formatted(row.title(), roleUrl(row), siteUrl, siteUrl);
         }
 
-        return """
+        return greeting(row) + """
                 %s was reviewed and not published.
 
                   %s
