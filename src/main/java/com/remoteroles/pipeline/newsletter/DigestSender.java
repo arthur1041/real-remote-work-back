@@ -73,9 +73,15 @@ public class DigestSender {
      * rotated roles through them, so with a hundred paying roles the one at
      * the back of the queue waited twenty weeks — a feature that is sold today
      * and delivered next season. Here the five places are *per reader*: with
-     * 790 subscribers the issue has about 3,950 of them, every paid role goes
-     * out in every issue, and what differs between two readers is which five
-     * they get.
+     * 790 subscribers the issue has about 3,950 of them, so every paid role is
+     * in every issue, and what differs between two readers is which five they
+     * get.
+     *
+     * <p>That capacity is readers times places, which is why the pricing page
+     * stops short of promising it in words: a paid list longer than 3,950
+     * would start missing readers, and an issue is skipped altogether on a
+     * week too quiet to fill the editorial list. What is sold is the place in
+     * the block, not a count of issues.
      *
      * <p>Arithmetic rather than randomness, so the same issue sent twice is
      * the same issue, and so this can be tested. The ring is walked from an
@@ -176,7 +182,7 @@ public class DigestSender {
         // Capped well below the organic list on purpose. A sold block that can
         // grow to the size of the editorial one stops being a block inside the
         // email and becomes the email.
-        List<Role> paid = paidRoles(since, roles);
+        List<Role> paid = paidRoles(roles);
 
         // An empty or nearly empty issue is worse than no issue: it spends the
         // one habit that matters, which is that opening this is worth doing.
@@ -306,29 +312,52 @@ public class DigestSender {
      *
      * <p>**Every eligible role, not a page of them.** What each reader is sent
      * is a slice of this list; see {@link #sliceFor}.
+     *
+     * <p><strong>No arrival window, and that was a defect.</strong> This read
+     * `j.first_seen_at > :since` alongside the editorial list, which is right
+     * for that list -- it is "what went up since the last issue" -- and wrong
+     * here. It meant a paid role rode exactly one issue, the one after it was
+     * published, and was then gone while the subscription went on being paid
+     * for. What is bought is a place in the block while the subscription is
+     * live, so the only dates that may decide eligibility are the role's own
+     * (closed or not) and the subscription's.
+     *
+     * <p><strong>The subscriber is the account that published the role, not
+     * the company the role is at.</strong> This joined
+     * `companies -> employers`, which answers "is this role's company some
+     * account's own company?" -- the same question until V49 let a posting
+     * carry its own hiring company. An agency publishing for a client files
+     * the role under the client, no account points at that `companies` row,
+     * and the join finds nobody: a paying recruiter would have been left out
+     * of the block on precisely the roles they pay for. The site's Featured
+     * sections ask through `employer_postings.job_id` and so does this now.
+     *
+     * <p>An `exists` rather than a join, because `employer_postings.job_id`
+     * carries no unique index: two rows pointing at one job would multiply the
+     * role in this list, and a semi-join cannot. (Production holds no such
+     * pair today; the shape is chosen so that it would not matter.)
      */
-    private List<Role> paidRoles(Instant since, List<Role> already) {
+    private List<Role> paidRoles(List<Role> already) {
         List<Long> seen = already.stream().map(Role::id).toList();
         return db.sql("""
                         select j.id, j.title, c.name as company,
                                coalesce(j.location_raw, 'Anywhere in the World') as location
                         from jobs j
                         join companies c on c.id = j.company_id
-                        join employers e on e.company_id = c.id
-                        join employer_subscriptions s on s.employer_id = e.id
                         where j.closed_at is null
                           and j.is_remote is true
                           and j.geo_scope = 'WORLDWIDE'
                           and j.classification_confidence >= 0.5
-                          and j.first_seen_at > :since
-                          and s.status = 'ACTIVE'
-                          and s.expires_at > now()
+                          and exists (
+                              select 1
+                                from employer_postings ep
+                                join employer_subscriptions s
+                                  on s.employer_id = ep.employer_id
+                               where ep.job_id = j.id
+                                 and s.status = 'ACTIVE'
+                                 and s.expires_at > now()
+                          )
                           and (:none or not (j.id = any(:seen)))
-                        -- Longest wait first: never featured before anything
-                        -- that has, then oldest appearance. This is the whole
-                        -- rotation, and it is what lets the pricing page say
-                        -- "your roles appear in the weekly email" rather than
-                        -- "may appear".
                         -- A stable order, not a priority one. Every eligible
                         -- role goes out in this issue; what this decides is
                         -- only where each sits in the ring that the slices are
@@ -337,7 +366,6 @@ public class DigestSender {
                         -- unevenly.
                         order by j.id
                         """)
-                .param("since", Timestamp.from(since))
                 // An empty array parameter is not portable through every driver
                 // path here, so the "nothing to exclude" case is a flag rather
                 // than an array that happens to be empty.
@@ -352,8 +380,7 @@ public class DigestSender {
     }
 
     /**
-     * Remembers which paid roles this issue carried, so the next one takes
-     * somebody else.
+     * Records that this issue carried these paid roles.
      *
      * <p>**After the sending, not before**, so an issue that was never sent
      * does not claim to have carried anything. It is read by the employer's
@@ -511,12 +538,11 @@ public class DigestSender {
         // A year back and capped, so a preview has roles in it whatever the week
         // happened to bring. The real issue uses the window since the last one.
         List<Role> roles = newWorldwideRoles(Instant.now().minus(365, ChronoUnit.DAYS), 8);
-        // The sold block over the same window, so a preview shows the email as
-        // a subscriber would actually receive it -- including the part that is
-        // paid for, which is the part most worth looking at before it goes out.
-        List<Role> paid = sliceFor(
-                paidRoles(Instant.now().minus(365, ChronoUnit.DAYS), roles),
-                paidSlots(roles.size()), 0, 0);
+        // The sold block exactly as a real issue builds it -- it has no window
+        // of its own to widen -- so a preview shows the email as a subscriber
+        // would actually receive it, including the part that is paid for, which
+        // is the part most worth looking at before it goes out.
+        List<Role> paid = sliceFor(paidRoles(roles), paidSlots(roles.size()), 0, 0);
         SubscriberRepository.Recipient person =
                 new SubscriberRepository.Recipient(0, to, "preview-token");
         mailer.send(to, "[preview] " + subject(roles.size()),
