@@ -12,18 +12,18 @@
 -- O radio `employers.posts_as`, de V47, já reconhecia que esses dois existem.
 -- Ele só consertava o selo. Isto conserta o nome.
 --
--- **`client_confidential` existe porque recrutador sigiloso é caso normal**,
--- não exceção: boa parte dos mandatos de agência proíbe nomear o cliente. Sem
--- uma saída honesta, quem está nessa situação escreve um nome falso ou não
--- publica, e as duas são piores que uma vaga que diz, com todas as letras,
--- que o contratante não foi nomeado. A vaga confidencial continua na página
--- da agência -- é o único lugar verdadeiro para ela -- e a flag é o que
--- permite dizer isso na tela em vez de deixar o candidato achar que a agência
--- é a contratante.
+-- **Não existe opção de não dizer.** A primeira versão tinha um
+-- `client_confidential`, para o recrutador sob cláusula de sigilo. Saiu antes
+-- de chegar a produção, e o raciocínio que o derrubou é o seguinte: se a
+-- única alternativa a nomear o cliente é mentir, e mentir contraria os termos
+-- e a revisão, então o honesto nomeia e o desonesto é pego -- a saída
+-- sigilosa não impede a mentira, legitima a opacidade. Vaga sem contratante
+-- nomeado é também o veículo clássico de vaga-fantasma e de coleta de
+-- currículo, e a candidatura interna passou a ser grátis para todos, de modo
+-- que essa superfície existe de fato.
 --
--- A mesma coluna entra em `jobs` porque é a vaga publicada que precisa
--- responder isso em toda listagem, e buscar o `employer_postings` por trás de
--- cada card seria uma junção por card para ler um booleano.
+-- O board inteiro existe para que o que o anúncio afirma seja verdade. Quem
+-- não pode dizer para quem contrata não publica aqui.
 --
 -- **Nulo nas vagas que já existem**, e o código cai no nome da conta, que é
 -- exatamente o comportamento de hoje. Nada publicado muda de empresa por
@@ -37,11 +37,7 @@
 
 alter table employer_postings
     add column hiring_company_name    text,
-    add column hiring_company_website text,
-    add column client_confidential    boolean not null default false;
-
-alter table jobs
-    add column client_confidential boolean not null default false;
+    add column hiring_company_website text;
 
 comment on column employer_postings.hiring_company_name is
     'A empresa contratante desta vaga, que não é necessariamente a do perfil '
@@ -50,11 +46,3 @@ comment on column employer_postings.hiring_company_name is
 comment on column employer_postings.hiring_company_website is
     'Opcional. Quando presente vira o domain da companies, o que separa duas '
     'empresas de mesmo nome e dá um slug melhor à página.';
-
-comment on column employer_postings.client_confidential is
-    'O anunciante não pode nomear o contratante. A vaga fica na página de '
-    'quem publicou, e a tela diz que o contratante não foi nomeado.';
-
-comment on column jobs.client_confidential is
-    'Copiado de employer_postings na aprovação, para a listagem responder '
-    'sem buscar a submissão por trás de cada card.';
