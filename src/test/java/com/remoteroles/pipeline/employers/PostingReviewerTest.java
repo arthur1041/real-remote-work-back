@@ -19,6 +19,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class PostingReviewerTest {
 
+    /** The text the model is pretending to have read, for the quote guard. */
+    private static final String POSTING =
+            "We are hiring a support engineer. You must reside in Germany. "
+            + "Mon-Fri 07.00-16.00 CST. Apply with your CV.";
+
     private static String reply(String inner) {
         return "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":"
                 + com.fasterxml.jackson.databind.node.TextNode.valueOf(inner) + "}]}}]}";
@@ -31,7 +36,7 @@ class PostingReviewerTest {
         @Test
         @DisplayName("publishes only on two clear yeses")
         void approvesWhenBothTrue() {
-            var v = PostingReviewer.parse(reply("{\"consistent\":true,\"genuine\":true,\"concern\":null,\"quote\":null}"));
+            var v = PostingReviewer.parse(reply("{\"consistent\":true,\"genuine\":true,\"concern\":null,\"quote\":null}"), POSTING);
             assertTrue(v.approved());
             assertEquals(null, v.note());
         }
@@ -42,7 +47,7 @@ class PostingReviewerTest {
             var v = PostingReviewer.parse(reply(
                     "{\"consistent\":false,\"genuine\":true,"
                     + "\"concern\":\"The posting requires the person to be based in Germany.\","
-                    + "\"quote\":\"You must reside in Germany.\"}"));
+                    + "\"quote\":\"You must reside in Germany.\"}"), POSTING);
             assertFalse(v.approved());
             assertTrue(v.note().startsWith("The text appears to disagree"));
             assertTrue(v.note().contains("You must reside in Germany."));
@@ -53,7 +58,7 @@ class PostingReviewerTest {
         void refersOnNotGenuine() {
             var v = PostingReviewer.parse(reply(
                     "{\"consistent\":true,\"genuine\":false,"
-                    + "\"concern\":\"This advertises a paid training course.\",\"quote\":null}"));
+                    + "\"concern\":\"This advertises a paid training course.\",\"quote\":null}"), POSTING);
             assertFalse(v.approved());
             assertTrue(v.note().startsWith("It doubts this is a genuine job opening."));
             assertFalse(v.note().contains("quoted"));
@@ -62,24 +67,106 @@ class PostingReviewerTest {
         @Test
         @DisplayName("refers when a field is missing — a silence is not a yes")
         void refersOnMissingField() {
-            assertFalse(PostingReviewer.parse(reply("{\"consistent\":true}")).approved());
-            assertFalse(PostingReviewer.parse(reply("{\"genuine\":true}")).approved());
+            assertFalse(PostingReviewer.parse(reply("{\"consistent\":true}"), POSTING).approved());
+            assertFalse(PostingReviewer.parse(reply("{\"genuine\":true}"), POSTING).approved());
         }
 
         @Test
         @DisplayName("refers when the answer is a word rather than a boolean")
         void refersOnStringBoolean() {
             assertFalse(PostingReviewer.parse(
-                    reply("{\"consistent\":\"true\",\"genuine\":\"true\"}")).approved());
+                    reply("{\"consistent\":\"true\",\"genuine\":\"true\"}"), POSTING).approved());
         }
 
         @Test
         @DisplayName("refers on anything that is not the shape of an answer")
         void refersOnRubbish() {
-            assertFalse(PostingReviewer.parse("not json at all").approved());
-            assertFalse(PostingReviewer.parse("{}").approved());
-            assertFalse(PostingReviewer.parse(reply("still not json")).approved());
-            assertFalse(PostingReviewer.parse("{\"candidates\":[]}").approved());
+            assertFalse(PostingReviewer.parse("not json at all", POSTING).approved());
+            assertFalse(PostingReviewer.parse("{}", POSTING).approved());
+            assertFalse(PostingReviewer.parse(reply("still not json"), POSTING).approved());
+            assertFalse(PostingReviewer.parse("{\"candidates\":[]}", POSTING).approved());
+        }
+    }
+
+    @Nested
+    @DisplayName("the quotation it offers as evidence")
+    class Quote {
+
+        @Test
+        @DisplayName("is shown when it really is in the posting")
+        void keepsRealQuote() {
+            var v = PostingReviewer.parse(reply(
+                    "{\"consistent\":false,\"genuine\":true,\"concern\":\"Germany only.\","
+                    + "\"quote\":\"You must reside in Germany.\"}"), POSTING);
+            assertTrue(v.note().contains("It quoted"));
+            assertTrue(v.note().contains("You must reside in Germany."));
+        }
+
+        @Test
+        @DisplayName("survives different punctuation and case, which the model reflows")
+        void ignoresPunctuation() {
+            assertTrue(PostingReviewer.quoted("you MUST reside, in Germany", POSTING));
+        }
+
+        @Test
+        @DisplayName("is dropped when the posting does not contain it")
+        void dropsInventedQuote() {
+            var v = PostingReviewer.parse(reply(
+                    "{\"consistent\":false,\"genuine\":true,\"concern\":\"US only.\","
+                    + "\"quote\":\"Applicants must hold a US green card.\"}"), POSTING);
+            assertFalse(v.note().contains("It quoted"));
+            assertTrue(v.note().contains("not in the posting"));
+            // The finding itself is kept: what was dropped is the evidence,
+            // not the concern, and the posting still goes to a person.
+            assertTrue(v.note().contains("US only."));
+            assertFalse(v.approved());
+        }
+
+        @Test
+        @DisplayName("rejects a fragment too short to mean anything")
+        void rejectsShortFragment() {
+            assertFalse(PostingReviewer.quoted("in", POSTING));
+            assertFalse(PostingReviewer.quoted(null, POSTING));
+        }
+    }
+
+    @Nested
+    @DisplayName("the daily ceiling on one account")
+    class Cap {
+
+        @Test
+        @DisplayName("refers rather than refuses, and says nothing is wrong with the posting")
+        void capRefers() {
+            var v = PostingReviewer.Verdict.capped(20);
+            assertFalse(v.approved());
+            assertTrue(v.note().contains("20"));
+            assertTrue(v.note().contains("daily limit"));
+            assertTrue(v.note().contains("Nothing is wrong with the posting"));
+        }
+
+        @Test
+        @DisplayName("names no model, so it costs nothing and counts for nothing tomorrow")
+        void capCostsNothing() {
+            assertEquals(null, PostingReviewer.Verdict.capped(20).model());
+            assertEquals(null, PostingReviewer.Verdict.capped(20).findings());
+        }
+
+        @Test
+        @DisplayName("a reading that failed also names no model")
+        void failuresDoNotCount() {
+            assertEquals(null, PostingReviewer.Verdict.refer("It could not run (HTTP 503).").model());
+            assertEquals(null,
+                    PostingReviewer.parse("not json at all", POSTING).model());
+        }
+
+        @Test
+        @DisplayName("a reading that answered is attributed, which is what the ceiling counts")
+        void answersAreAttributed() {
+            var v = PostingReviewer.parse(reply(
+                    "{\"consistent\":true,\"genuine\":true,\"concern\":null,\"quote\":null}"), POSTING)
+                    .by("gemini-3.1-flash-lite");
+            assertEquals("gemini-3.1-flash-lite", v.model());
+            assertTrue(v.approved());
         }
     }
 
