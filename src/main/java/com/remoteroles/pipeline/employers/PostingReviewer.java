@@ -243,8 +243,16 @@ public class PostingReviewer {
                        p.geo_scope, p.geo_detail,
                        coalesce(array_to_string(p.geo_excluded, ', '), '') as excluded
                   from employer_postings p
+                  join employers e on e.id = p.employer_id
                   join employer_subscriptions s on s.employer_id = p.employer_id
                  where p.status = 'PENDING'
+                   -- O endereço precisa estar confirmado AGORA, não só quando
+                   -- a vaga foi enviada. Trocar o e-mail zera a confirmação e
+                   -- deixa as vagas pendentes onde estão; publicar uma delas
+                   -- sem ninguém olhar manda a decisão -- e depois as
+                   -- candidaturas -- para um endereço que ninguém provou.
+                   -- A vaga não é recusada: espera uma pessoa, como antes.
+                   and e.email_verified_at is not null
                    -- Not read *at this version*. The stamp used to be a column
                    -- that an edit had to remember to clear; now the question is
                    -- asked of the record itself, so a resubmission is eligible
