@@ -258,14 +258,20 @@ public class PostingDecisionSender {
     }
 
     public void sendApprovedPreview(String to) {
+        /* The two previews carry a contact name and no contact name on purpose.
+           Nothing else exercises this class -- there is no test for it -- so the
+           pair is what shows that the greeting appears when the account has a
+           name and that the message still opens properly when it does not,
+           which is every account made before the name was asked for. */
         Decided row = new Decided(
-                0, to, "Senior Platform Engineer", "Northwind Systems", true, 849298L, "");
+                0, to, "Senior Platform Engineer", "Northwind Systems", "Dana Whitfield",
+                true, 849298L, "");
         mailer.send(to, "[preview] " + subject(row), body(row), html(row));
     }
 
     public void sendRejectedPreview(String to) {
         Decided row = new Decided(
-                0, to, "Senior Platform Engineer", "Northwind Systems", false, null,
+                0, to, "Senior Platform Engineer", "Northwind Systems", null, false, null,
                 "The advert says candidates must be eligible to work in the EU, which does "
                         + "not match the worldwide eligibility declared on the form.");
         mailer.send(to, "[preview] " + subject(row), body(row), html(row));
