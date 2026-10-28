@@ -568,6 +568,16 @@ public class PostingReviewer {
 
             HttpResponse<String> response = http.send(
                     HttpRequest.newBuilder(URI.create(webBaseUrl + "/api/internal/review-posting"))
+                            // HTTP/1.1 dito na mão. O padrão do HttpClient é HTTP_2,
+                            // e em `http://` isso sai como um pedido com
+                            // `Upgrade: h2c` -- que o servidor do Next não responde:
+                            // ele destrói o socket, e o que chega aqui é
+                            // `IOException: HTTP/1.1 header parser received no bytes`.
+                            // Medido nas duas pontas: `curl --http1.1` responde (200
+                            // local, 403 em produção com token errado) e `curl --http2`
+                            // devolve 000 nas duas. Custou dois vereditos do modelo,
+                            // produzidos e jogados fora antes de serem gravados.
+                            .version(HttpClient.Version.HTTP_1_1)
                             .header("x-internal-token", token)
                             .header("Content-Type", "application/json")
                             .timeout(Duration.ofSeconds(30))

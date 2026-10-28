@@ -124,6 +124,13 @@ public class ResumeRetentionJob {
         try {
             HttpResponse<String> response = http.send(
                     HttpRequest.newBuilder(URI.create(webBaseUrl + "/api/internal/resume-sweep"))
+                            // Como no PostingReviewer: o padrão HTTP_2 vira
+                            // `Upgrade: h2c` em `http://`, e o servidor do Next fecha
+                            // o socket sem responder. Aqui a falha era latente -- a
+                            // varredura só chama o site quando há documento vencido, e
+                            // em 72h de log de produção não houve nenhum -- mas é a
+                            // mesma falha.
+                            .version(HttpClient.Version.HTTP_1_1)
                             .header("X-Internal-Token", token)
                             .header("Content-Type", "application/json")
                             .timeout(Duration.ofSeconds(120))
