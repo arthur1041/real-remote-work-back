@@ -226,6 +226,28 @@ posting-review:
   interval-ms: ${POSTING_REVIEW_INTERVAL_MS:60000}
   batch-size: ${POSTING_REVIEW_BATCH:10}
 
+# O aviso diário de mensagem não lida.
+#
+# O chat alcança quem está com o navegador aberto e o push alcança quem deu
+# permissão num aparelho que suporta. Nenhum dos dois alcança quem fechou a aba
+# há dois dias, que é a maioria. Este é o canal que alcança.
+#
+# **O desenho inteiro é a regra de não repetir.** Um job diário que pergunta
+# "esta pessoa tem mensagem não lida?" escreve para ela todo santo dia até ela
+# ler, para sempre -- que é como um aviso útil vira o motivo de alguém marcar o
+# domínio como spam, e este domínio também carrega os códigos de login. Então a
+# pergunta é "tem mensagem não lida que este aviso nunca mencionou": cada
+# mensagem é carimbada em `notified_at` ao entrar num email, e carimbada nunca
+# mais conta. Quem nunca lê recebe exatamente um aviso por mensagem, espalhado
+# pelos dias, e depois silêncio.
+#
+# Nove da manhã, uma vez por dia. Cobrado da faixa COLD do orçamento de email:
+# ninguém está esperando isto num formulário, e segurar por um dia não custa
+# nada porque nada é carimbado sem ser enviado.
+messages:
+  digest:
+    cron: ${MESSAGE_DIGEST_CRON:0 0 9 * * *}
+
 retention:
   web-url: ${RETENTION_WEB_URL:http://web:3000}
   token: ${INTERNAL_TASK_TOKEN:}
