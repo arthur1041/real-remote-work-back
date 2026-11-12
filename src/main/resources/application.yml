@@ -245,6 +245,39 @@ posting-review:
   interval-ms: ${POSTING_REVIEW_INTERVAL_MS:60000}
   batch-size: ${POSTING_REVIEW_BATCH:10}
 
+# O aviso de decisão para o empregador: uma mensagem por empregador por sessão
+# de moderação, não uma por vaga.
+#
+# **`settle-minutes` é a coisa toda.** Uma decisão fica retida enquanto aquele
+# empregador tiver qualquer decisão ainda não avisada mais nova que esta
+# janela. Enquanto alguém está descendo a fila, nada sai; quando para, sai uma
+# mensagem com tudo. Vale para os dois caminhos de aprovação sem precisar saber
+# de nenhum: tanto o revisor do Gemini quanto a tela de admin só escrevem
+# `status` e `reviewed_at`, e a varredura é a mesma.
+#
+# O número vem do estrago medido: um empregador mandou **107 vagas**, e aprovar
+# 79 delas gerou **79 e-mails para o mesmo endereço numa tarde** -- 243 dos 300
+# envios do dia, com 28 submissões ainda na fila. Dez minutos de silêncio é
+# mais do que o intervalo entre dois cliques de quem está aprovando em série e
+# pouco o bastante para quem mandou uma vaga só não ficar esperando.
+#
+# Zero desliga a janela e volta ao comportamento antigo, um e-mail por decisão,
+# que é defensável num quadro que recebe uma submissão por semana.
+#
+# O `cron` só decide o tremor, não o agrupamento: a consulta vazia é um lookup
+# indexado, então rodar de minuto em minuto apenas faz a mensagem sair junto
+# com o fim da janela em vez de até dez minutos depois dele.
+employer:
+  decision-notice:
+    cron: ${DECISION_NOTICE_CRON:0 * * * * *}
+    settle-minutes: ${DECISION_NOTICE_SETTLE_MINUTES:10}
+    # Quantas vagas a mensagem lista antes de dizer "e outras N". O Gmail corta
+    # mensagem acima de ~102KB e troca o resto por um link; uma vaga listada dá
+    # uns 500 bytes de HTML, então 40 cabem com folga e as 107 do caso real
+    # sairiam cortadas no meio -- onde as últimas ficam menos visíveis do que se
+    # nunca tivessem sido listadas.
+    max-roles-listed: ${DECISION_NOTICE_MAX_LISTED:40}
+
 # O aviso diário de mensagem não lida.
 #
 # O chat alcança quem está com o navegador aberto e o push alcança quem deu
