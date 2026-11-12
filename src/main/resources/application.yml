@@ -80,9 +80,28 @@ newsletter:
   # schedule rather than at capture time because the capture happens in the web
   # app and delivery lives here -- a minute of latency on a confirmation is
   # nothing, and it keeps mail in one process.
-  # Where a submission waiting for review is announced. Unset means no alert is
-  # sent, and the queue is only found by someone opening it.
+  # The operator's inbox, for the few things that genuinely need a person.
+  # Since 12 Nov 2026 only the scope review's own failure alert uses it -- see
+  # `posting-alert-to` below and the comment in ScopeReviewer. Unset means those
+  # failures exist in the log and nowhere else.
   review-alert-to: ${REVIEW_ALERT_TO:}
+
+  # Where a submission waiting for review is announced, and deliberately EMPTY.
+  #
+  # This was `review-alert-to` until 12 Nov 2026, so every role an employer
+  # submitted sent the operator one message: 206 of the 211 submissions since
+  # 17 Oct were announced that way. The mail was never read for its content --
+  # /admin/postings is opened daily regardless, and the alert only repeated what
+  # the queue already said -- while each one spent a transactional send out of a
+  # Brevo allowance of 300 a day, the same pool the confirmations, the decision
+  # mails and the digest come out of.
+  #
+  # The mechanism is kept rather than deleted, because the reason it was built
+  # still holds for a queue nobody is watching: set POSTING_ALERT_TO and the
+  # alert is back exactly as it was. Note that nothing is stamped while this is
+  # empty, so the first run after setting it announces the entire backlog of
+  # PENDING submissions, twenty a minute until it is drained.
+  posting-alert-to: ${POSTING_ALERT_TO:}
 
   # The digest. Weekly, not daily: the subscription form promises "one message a
   # week", and a list that is mailed more often than it was told is a list that
