@@ -12,6 +12,13 @@ target/
 .DS_Store
 *.log
 
+# A chave de conta de servico do Google (Vertex e Indexing API). Copia local do
+# que mora em /opt/actuallyremote/secrets no servidor, e o unico arquivo aqui
+# que valeria alguma coisa para outra pessoa. A pasta inteira, nao so o nome de
+# hoje: a proxima chave vai ter outro nome e ninguem vai lembrar desta linha.
+secrets/
+*-key.json
+
 # Env & secrets
 .env
 .env*.local

@@ -226,6 +226,88 @@ posting-review:
   interval-ms: ${POSTING_REVIEW_INTERVAL_MS:60000}
   batch-size: ${POSTING_REVIEW_BATCH:10}
 
+# A leitura de cada candidatura contra o que a vaga pede: o que o Growth vende.
+#
+# Mesma credencial e mesmo modelo dos dois leitores acima -- não existe segunda
+# chave. Desligado por padrão, como eles, porque um leitor que começa a gastar
+# sozinho ao subir é a forma errada de descobrir que estava ligado.
+#
+# **Os tetos não são preferência, são o que mantém a margem.** Uma leitura
+# custa cerca de dois décimos de centavo; mil delas, que é o incluído no plano,
+# custam uns dois dólares contra uma assinatura de 39,90. `reads-a-month` é o
+# número que está escrito no cartão do plano e tem que andar junto com
+# `GROWTH_READS_A_MONTH` em `web/lib/plans.ts`. `daily-cap` é o disjuntor acima
+# de tudo, para o caso que ninguém modelou.
+semantic:
+  # O índice semântico da descoberta: um resumo por candidato e por vaga,
+  # escrito pelo modelo, e um vetor por resumo. Desligado por padrão como todo
+  # o resto que gasta modelo -- ligar é uma variável, não um deploy.
+  enabled: ${SEMANTIC_ENABLED:false}
+  key-file: ${SEMANTIC_KEY_FILE:${SCOPE_REVIEW_KEY_FILE:}}
+  project: ${SEMANTIC_PROJECT:${SCOPE_REVIEW_PROJECT:actually-remote}}
+  location: ${SEMANTIC_LOCATION:global}
+  model: ${SEMANTIC_MODEL:gemini-3.1-flash-lite}
+  # O embedder e onde ele responde. Separado do gerativo de propósito: os
+  # modelos generativos deste projeto só respondem em `global` -- medido, o
+  # `us-central1` devolve NOT_FOUND para todo nome de modelo aqui -- e isso é
+  # um fato sobre generateContent, não sobre embeddings.
+  embed-model: ${SEMANTIC_EMBED_MODEL:gemini-embedding-001}
+  embed-location: ${SEMANTIC_EMBED_LOCATION:us-central1}
+  # 768 e não 3072: ver o comentário no construtor e a migração V64. Este
+  # número e o `vector(768)` do schema têm de mudar juntos.
+  dimensions: ${SEMANTIC_DIMENSIONS:768}
+  web-url: ${SEMANTIC_WEB_URL:${SCREENING_WEB_URL:http://web:3000}}
+  token: ${INTERNAL_TASK_TOKEN:}
+  # A varredura é frequente e quase sempre vazia; o "diário" do pedido é o
+  # teto de gasto, não a cadência. Quem se cadastra às dez da manhã não fica
+  # invisível para a descoberta até amanhã.
+  interval-ms: ${SEMANTIC_INTERVAL_MS:300000}
+  initial-delay-ms: ${SEMANTIC_INITIAL_DELAY_MS:60000}
+  batch-size: ${SEMANTIC_BATCH:10}
+  daily-cap: ${SEMANTIC_DAILY_CAP:500}
+  max-attempts: ${SEMANTIC_MAX_ATTEMPTS:3}
+  # Minutos que uma alteração precisa ficar parada antes de virar resumo:
+  # quem salva o perfil quatro vezes em dois minutos é resumido uma vez.
+  settle-minutes: ${SEMANTIC_SETTLE_MINUTES:10}
+  retry-after-minutes: ${SEMANTIC_RETRY_AFTER_MINUTES:20}
+
+ranking:
+  # O terceiro passo da descoberta: ler a lista que os vetores montaram e dar
+  # nota requisito a requisito. A nota é aritmética daqui, nunca opinião do
+  # modelo -- ver o comentário em `DiscoveryRanker` e em `application_screenings`.
+  enabled: ${RANKING_ENABLED:false}
+  key-file: ${RANKING_KEY_FILE:${SCOPE_REVIEW_KEY_FILE:}}
+  project: ${RANKING_PROJECT:${SCOPE_REVIEW_PROJECT:actually-remote}}
+  location: ${RANKING_LOCATION:global}
+  model: ${RANKING_MODEL:gemini-3.1-flash-lite}
+  # Mais frequente que o índice porque aqui tem gente esperando: a lista já
+  # está na tela, ordenada pelos vetores, e estas chamadas são o que vira nota.
+  interval-ms: ${RANKING_INTERVAL_MS:20000}
+  initial-delay-ms: ${RANKING_INITIAL_DELAY_MS:30000}
+  batch-size: ${RANKING_BATCH:10}
+  max-attempts: ${RANKING_MAX_ATTEMPTS:3}
+  pace-ms: ${RANKING_PACE_MS:5000}
+  backoff-seconds: ${RANKING_BACKOFF_SECONDS:30}
+
+screening:
+  enabled: ${SCREENING_ENABLED:false}
+  key-file: ${SCREENING_KEY_FILE:${SCOPE_REVIEW_KEY_FILE:}}
+  project: ${SCREENING_PROJECT:${SCOPE_REVIEW_PROJECT:actually-remote}}
+  location: ${SCREENING_LOCATION:global}
+  model: ${SCREENING_MODEL:gemini-3.1-flash-lite}
+  web-url: ${SCREENING_WEB_URL:http://web:3000}
+  token: ${INTERNAL_TASK_TOKEN:}
+  interval-ms: ${SCREENING_INTERVAL_MS:60000}
+  batch-size: ${SCREENING_BATCH:20}
+  reads-a-month: ${SCREENING_READS_A_MONTH:1000}
+  daily-cap: ${SCREENING_DAILY_CAP:2000}
+  # Uma leitura que falhou volta para a fila, com espera crescente, até o teto.
+  # Sem isso um blip de rede tirava a nota daquela pessoa para sempre -- ver o
+  # comentário de `attempts` na V58.
+  max-attempts: ${SCREENING_MAX_ATTEMPTS:3}
+  retry-after-minutes: ${SCREENING_RETRY_AFTER_MINUTES:10}
+  stale-after-minutes: ${SCREENING_STALE_AFTER_MINUTES:15}
+
 # O aviso diário de mensagem não lida.
 #
 # O chat alcança quem está com o navegador aberto e o push alcança quem deu
