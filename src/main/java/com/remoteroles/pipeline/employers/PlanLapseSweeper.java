@@ -14,11 +14,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Takes Starter-published roles off the board when the subscription behind them
- * ends, and puts them back when it returns.
+ * Takes roles published under a paid plan off the board when the subscription
+ * behind them ends, and puts them back when it returns.
  *
  * <p><strong>Why this exists.</strong> Starter is sold as a subscription and
  * was delivered as a permanent placement: nothing ever closed a published role,
@@ -57,10 +57,16 @@ public class PlanLapseSweeper {
      * The roles to take down, and the one that survives.
      *
      * <p>The rule, in the product owner's words: the role published on Free
-     * holds its place, because cancelling Starter has no business taking down
-     * something Starter never carried. Only when nothing free-era is open does
-     * one Starter role stay, so that an employer who subscribed straight away
-     * is left on the same footing as a free account rather than with nothing.
+     * holds its place, because cancelling a paid plan has no business taking
+     * down something that plan never carried. Only when nothing free-era is
+     * open does one paid-era role stay, so that an employer who subscribed
+     * straight away is left on the same footing as a free account rather than
+     * with nothing.
+     *
+     * <p><strong>"Paid" is written as "not FREE" rather than as a list of plan
+     * names.</strong> A predicate naming STARTER would quietly stop reaching
+     * roles the moment a second paid plan existed — and stop silently, because
+     * a sweep that pauses nothing logs nothing.
      *
      * <p>Most recent rather than oldest, for a reason the data made concrete:
      * the 128 roles of the account that prompted this were all submitted within
@@ -71,13 +77,14 @@ public class PlanLapseSweeper {
      * not as this sweep's.
      */
     static final String TO_PAUSE = """
-            with open_starter as (
+            with open_paid as (
                 select p.id, p.employer_id, p.job_id, p.geo_scope, p.geo_detail,
                        row_number() over (partition by p.employer_id
                                           order by p.created_at desc, p.id desc) as recency
                   from employer_postings p
                   join jobs j on j.id = p.job_id
-                 where p.published_plan = 'STARTER'
+                 where p.published_plan is not null
+                   and p.published_plan <> 'FREE'
                    and p.status = 'APPROVED'
                    and p.paused_at is null
                    and j.closed_at is null
@@ -97,7 +104,7 @@ public class PlanLapseSweeper {
                    and j.closed_at is null
             )
             select o.id, o.job_id, o.employer_id, o.geo_scope, o.geo_detail
-              from open_starter o
+              from open_paid o
              where o.recency > 1
                 or o.employer_id in (select employer_id from has_free_open)
              order by o.employer_id, o.id
@@ -127,6 +134,7 @@ public class PlanLapseSweeper {
             """;
 
     private final JdbcClient db;
+    private final TransactionTemplate tx;
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
@@ -135,6 +143,18 @@ public class PlanLapseSweeper {
 
     public PlanLapseSweeper(
             JdbcClient db,
+            /* **A TransactionTemplate and not @Transactional, and the
+               difference is not style.** `sweep()` calls these two methods on
+               `this`, and a call on `this` does not go through the Spring
+               proxy that @Transactional is implemented by -- so the annotation
+               was there, looked right, and did nothing at all. Each statement
+               would have committed on its own, and a failure between the two
+               updates would leave a role flagged as paused while its listing
+               stayed open, which `TO_PAUSE` can never return again because the
+               flag is what it filters on. A permanent inconsistency produced
+               by the code that exists to prevent one. Found by reading the
+               call, not by running it: nothing about it fails in a test. */
+            TransactionTemplate tx,
             // The web process on the compose network, not the public hostname.
             // This call has no business leaving the machine, and routing it
             // through Caddy would send the token over a path reachable from
@@ -143,6 +163,7 @@ public class PlanLapseSweeper {
             @Value("${employer.plan-lapse.web-url:http://web:3000}") String webBaseUrl,
             @Value("${employer.plan-lapse.token:}") String token) {
         this.db = db;
+        this.tx = tx;
         this.webBaseUrl = webBaseUrl.endsWith("/")
                 ? webBaseUrl.substring(0, webBaseUrl.length() - 1)
                 : webBaseUrl;
@@ -186,8 +207,8 @@ public class PlanLapseSweeper {
     }
 
     /** Roles whose subscription has ended come off the board. Returns how many. */
-    @Transactional
     public List<Affected> pauseLapsed() {
+        return tx.execute(status -> {
         List<Affected> rows = db.sql(TO_PAUSE).query(PlanLapseSweeper::map).list();
         if (rows.isEmpty()) return List.of();
 
@@ -213,11 +234,12 @@ public class PlanLapseSweeper {
         log.info("paused {} role(s) for {} employer(s) whose plan ended",
                 rows.size(), rows.stream().map(Affected::employerId).distinct().count());
         return rows;
+        });
     }
 
     /** Roles paused by a lapse go back up when the entitlement returns. */
-    @Transactional
     public List<Affected> restoreResubscribed() {
+        return tx.execute(status -> {
         List<Affected> rows = db.sql(TO_RESTORE).query(PlanLapseSweeper::map).list();
         if (rows.isEmpty()) return List.of();
 
@@ -246,6 +268,7 @@ public class PlanLapseSweeper {
         log.info("restored {} role(s) for {} employer(s) who are paying again",
                 rows.size(), rows.stream().map(Affected::employerId).distinct().count());
         return rows;
+        });
     }
 
     /**
@@ -277,6 +300,16 @@ public class PlanLapseSweeper {
         try {
             HttpResponse<String> response = http.send(
                     HttpRequest.newBuilder(URI.create(webBaseUrl + "/api/internal/revalidate-jobs"))
+                            // HTTP/1.1, explicitamente, como as outras duas chamadas
+                            // internas deste processo. O HttpClient do Java negocia
+                            // HTTP/2 por padrão e o servidor do Next fecha a conexão:
+                            // `IOException: HTTP/1.1 header parser received no bytes`.
+                            // Reproduzido de novo aqui, de ponta a ponta, por esta
+                            // linha ter faltado -- a varredura pausou as cinco vagas
+                            // e nenhuma página mudou, com o aviso engolido no log.
+                            // É o mesmo defeito que custou dois vereditos do modelo
+                            // em `PostingReviewer`, e a terceira vez que ele aparece.
+                            .version(HttpClient.Version.HTTP_1_1)
                             .header("content-type", "application/json")
                             .header("x-internal-token", token)
                             .timeout(Duration.ofSeconds(30))
@@ -286,10 +319,19 @@ public class PlanLapseSweeper {
             if (response.statusCode() != 200) {
                 log.warn("the site refused the revalidation: {}", response.statusCode());
             }
+        } catch (InterruptedException e) {
+            // The only exception that must put the flag back, because catching
+            // it cleared it. Doing this for every failure -- which is what this
+            // block used to do -- would leave the scheduler's thread marked as
+            // interrupted after an ordinary connection refusal, and the next
+            // blocking call on it would fail for a reason that has nothing to
+            // do with what went wrong.
+            Thread.currentThread().interrupt();
+            log.warn("interrupted while asking the site to revalidate; the pages"
+                    + " will catch up on their own within the hour");
         } catch (Exception e) {
             log.warn("could not ask the site to revalidate ({}); the pages will catch up"
                     + " on their own within the hour", e.toString());
-            Thread.currentThread().interrupt();
         }
     }
 

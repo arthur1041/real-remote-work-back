@@ -31,8 +31,22 @@
 -- encheria a coluna de respostas inventadas.
 alter table employer_postings add column published_plan text;
 
+-- **A regra não é uma lista dos planos de hoje, e isso foi aprendido doendo.**
+--
+-- A primeira versão aceitava só FREE e STARTER, que é o conjunto que existe à
+-- venda. O carimbo, porém, grava o que `planFor` devolver, e `planFor` devolve
+-- o que estiver na linha da assinatura. Reproduzido no banco local, que já tem
+-- assinaturas GROWTH da branch parada: a constraint recusa a linha, e quem
+-- recusa uma linha dentro de `approvePosting` **quebra a aprovação inteira** --
+-- não a pausa, não o carimbo: a publicação. O dia em que o plano de cima
+-- entrasse à venda, aprovar qualquer vaga de quem assinou ele passaria a dar
+-- erro, e o defeito só apareceria em produção, na primeira aprovação.
+--
+-- Então o formato é conferido e o vocabulário não: qualquer nome de plano em
+-- maiúsculas passa, e o que a varredura pergunta não é "é STARTER?" mas "é
+-- diferente de FREE?", que continua verdadeiro para todo plano pago que vier.
 alter table employer_postings add constraint employer_postings_published_plan_valid
-    check (published_plan is null or published_plan in ('FREE', 'STARTER'));
+    check (published_plan is null or published_plan ~ '^[A-Z][A-Z_]*$');
 
 -- ----------------------------------------------------------------- a pausa
 
@@ -95,16 +109,17 @@ create index employer_postings_paused
 -- do Stripe, não tem vaga nenhuma; o empregador 1 tem 5, todas anteriores à
 -- sua assinatura manual e nenhuma no ar. Então isto deve carimbar 128 linhas
 -- como STARTER e o resto como FREE.
+-- O nome do plano vem da própria linha da assinatura, não escrito à mão como
+-- 'STARTER'. Hoje em produção dá no mesmo, porque STARTER é a única assinatura
+-- que existe lá; no banco local, que tem assinaturas GROWTH da branch parada,
+-- escrever 'STARTER' marcaria como Starter uma vaga que nunca foi.
 update employer_postings p
-   set published_plan = case
-         when exists (
-             select 1 from employer_subscriptions s
-              where s.employer_id = p.employer_id
-                and s.plan = 'STARTER'
-                and p.created_at >= s.started_at
-                and p.created_at <  s.expires_at)
-         then 'STARTER'
-         else 'FREE'
-       end
+   set published_plan = coalesce((
+         select s.plan from employer_subscriptions s
+          where s.employer_id = p.employer_id
+            and p.created_at >= s.started_at
+            and p.created_at <  s.expires_at
+          order by s.expires_at desc
+          limit 1), 'FREE')
  where p.published_plan is null
    and p.status in ('APPROVED', 'REMOVED', 'WITHDRAWN');
