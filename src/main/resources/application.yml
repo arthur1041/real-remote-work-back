@@ -277,6 +277,30 @@ employer:
     # sairiam cortadas no meio -- onde as últimas ficam menos visíveis do que se
     # nunca tivessem sido listadas.
     max-roles-listed: ${DECISION_NOTICE_MAX_LISTED:40}
+  # A varredura que tira do quadro a vaga publicada no Starter quando a
+  # assinatura por trás dela acaba, e que a devolve quando ela volta.
+  #
+  # De hora em hora, aos cinco. Nada aqui precisa ser pontual ao minuto: uma
+  # assinatura que terminou às 03:00 e um quadro que percebe às 04:05 diferem
+  # em uma hora numa coisa medida em meses. O que precisa é rodar com
+  # frequência suficiente para quem reassinou não ficar olhando um painel vazio
+  # se perguntando se funcionou, que é a direção que custa dinheiro.
+  plan-lapse:
+    cron: ${PLAN_LAPSE_CRON:0 5 * * * *}
+    # Escrever a linha é metade do trabalho: toda página onde a vaga aparece é
+    # pré-renderizada de hora em hora, então uma vaga pausada no banco continua
+    # sendo servida inteira -- descrição, botão de candidatar-se e os dados
+    # estruturados que a oferecem ao Google Jobs -- pela página construída
+    # antes da pausa. Medido durante a construção. A rota de candidatura recusa
+    # o clique porque é dinâmica e lê a linha, então ninguém consegue se
+    # candidatar; mas a vaga continua anunciada. Daí a chamada.
+    #
+    # Mesmo endereço e mesmo segredo da varredura de CV: o processo web na rede
+    # do compose, nunca o hostname público, porque isto não tem o que fazer
+    # saindo da máquina. Sem token, a chamada não acontece e as páginas se
+    # resolvem sozinhas dentro da hora.
+    web-url: ${PLAN_LAPSE_WEB_URL:http://web:3000}
+    token: ${INTERNAL_TASK_TOKEN:}
 
 # O aviso diário de mensagem não lida.
 #
