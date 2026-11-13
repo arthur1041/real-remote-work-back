@@ -298,8 +298,9 @@ public class PostingDecisionSender {
             return greeting(first) + """
                     %d roles are published and anyone can find them now:
 
-                    %sThey are in the featured section while they are new, and each one \
-                    appears in the searches that match it. Edit any of them or take them \
+                    %sThey are in the featured section for as long as they are open, with the \
+                    newest taking the most turns in it, and each one appears in the \
+                    searches that match it. Edit any of them or take them \
                     down any time from your dashboard:
 
                     %s/employers
@@ -355,7 +356,8 @@ public class PostingDecisionSender {
                                     + "."))
                     + EmailLayout.rule()
                     + EmailLayout.paragraph(
-                            "Each sits in the featured section while it is new, and appears "
+                            "Each sits in the featured section for as long as it is open, "
+                                    + "the newest taking the most turns in it, and appears "
                                     + "in the searches that match it. Edit any of them or take "
                                     + "them down any time from "
                                     + EmailLayout.textLink(siteUrl + "/employers",
@@ -424,7 +426,8 @@ public class PostingDecisionSender {
 
                     %s
 
-                    It is in the featured section while it is new, and it appears in \
+                    It is in the featured section for as long as it is open, with the \
+                    newest roles taking the most turns in it, and it appears in \
                     the searches that match it. Edit or take it down any time from \
                     your dashboard:
 
@@ -461,8 +464,9 @@ public class PostingDecisionSender {
                         + EmailLayout.button(roleUrl(row), "See it on the board")
                         + EmailLayout.rule()
                         + EmailLayout.paragraph(
-                                "It sits in the featured section while it is new, and it "
-                                        + "appears in the searches that match it. Edit it or "
+                                "It sits in the featured section for as long as it is "
+                                        + "open, with the newest taking the most turns in it, "
+                                        + "and it appears in the searches that match it. Edit it or "
                                         + "take it down any time from "
                                         + EmailLayout.textLink(siteUrl + "/employers",
                                                 "your dashboard")
