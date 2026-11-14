@@ -38,7 +38,15 @@ import java.util.Map;
 @RequestMapping("/admin")
 public class AdminController {
 
-    private final DigestSender digest;
+    // Conditional on newsletter.digest.enabled, which defaults to false, so it
+    // is absent on every box that has not switched it on -- including the
+    // one-shot ingest that brings a developer's database up. Asking for it
+    // directly is what made `docker compose run ingest` fail with "No
+    // qualifying bean of type DigestSender" before a single migration ran, on
+    // a profile that starts no web server and would never serve this
+    // controller anyway. Same reasoning as the two providers below, and the
+    // same fix.
+    private final ObjectProvider<DigestSender> digest;
     private final InviteSender invites;
     private final ReviewAlerter reviews;
     private final PostingDecisionSender decisions;
@@ -59,7 +67,7 @@ public class AdminController {
     private final JobRepository jobs;
     private final ScopeRechecker rechecker;
 
-    public AdminController(DigestSender digest, InviteSender invites, ReviewAlerter reviews,
+    public AdminController(ObjectProvider<DigestSender> digest, InviteSender invites, ReviewAlerter reviews,
                            PostingDecisionSender decisions,
                            EmailVerificationSender verifications,
                            ApplicationSender applications,
@@ -160,7 +168,14 @@ public class AdminController {
      */
     @PostMapping("/newsletter/send")
     public Map<String, Integer> sendDigestNow() {
-        return Map.of("recipients", digest.sendIssueNow());
+        DigestSender sender = digest.getIfAvailable();
+        if (sender == null) {
+            // Says which switch, because "0 recipients" would read as "nobody
+            // is subscribed" and send somebody looking in the wrong place.
+            throw new IllegalStateException(
+                    "the digest is off: set newsletter.digest.enabled=true to send one");
+        }
+        return Map.of("recipients", sender.sendIssueNow());
     }
 
     /**
@@ -227,9 +242,17 @@ public class AdminController {
         }
 
         if (wanted(only, "digest")) {
-            digest.sendPreview(to);
-            budget.record(MailBudget.Tier.TRANSACTIONAL);
-            result.put("digest", "sent");
+            DigestSender sender = digest.getIfAvailable();
+            if (sender == null) {
+                // The preview reports the gap rather than failing the whole
+                // call, which is the behaviour the other two providers here
+                // already have: one template missing is not a broken preview.
+                result.put("digest", "skipped: newsletter.digest.enabled is off");
+            } else {
+                sender.sendPreview(to);
+                budget.record(MailBudget.Tier.TRANSACTIONAL);
+                result.put("digest", "sent");
+            }
         }
 
         if (wanted(only, "reviewAlert")) {
