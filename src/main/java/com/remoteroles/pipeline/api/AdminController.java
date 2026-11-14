@@ -253,6 +253,22 @@ public class AdminController {
             result.put("decisionRejected", "sent");
         }
 
+        // And the batched pair, which is what an employer who submits a hundred
+        // roles actually receives. Nameable on its own because it is where the
+        // wording is hardest to get right and the easiest thing to never look
+        // at: nobody can produce a hundred-role sitting by hand to see it.
+        if (wanted(only, "decision") || "decisionApprovedBatch".equalsIgnoreCase(only)) {
+            decisions.sendApprovedBatchPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
+            result.put("decisionApprovedBatch", "sent");
+        }
+
+        if (wanted(only, "decision") || "decisionRejectedBatch".equalsIgnoreCase(only)) {
+            decisions.sendRejectedBatchPreview(to);
+            budget.record(MailBudget.Tier.TRANSACTIONAL);
+            result.put("decisionRejectedBatch", "sent");
+        }
+
         if (wanted(only, "verification")) {
             verifications.sendPreview(to);
             budget.record(MailBudget.Tier.TRANSACTIONAL);

@@ -20,6 +20,17 @@ import org.springframework.stereotype.Service;
  *
  * <p>Each posting is announced once. The alternative, re-sending until the
  * queue is empty, is how a person learns to ignore the mail.
+ *
+ * <p><b>Off since 12 Nov 2026</b>, and this class is deliberately still here.
+ * It reads `newsletter.posting-alert-to`, which is empty and set nowhere: the
+ * premise above turned out to be false in practice, because /admin/postings is
+ * opened every day anyway and the alert only repeated what the queue already
+ * said. 206 of the 211 submissions since 17 Oct were announced by mail and not
+ * one of them was read for its content, at one transactional send each out of a
+ * daily allowance of 300. It no longer shares the operator's inbox address
+ * (`review-alert-to`), which still carries the scope review's failure alert --
+ * that one is about something being broken, not about something being waiting.
+ * Set POSTING_ALERT_TO and this works exactly as it always did.
  */
 @Service
 public class ReviewAlerter {
@@ -36,7 +47,7 @@ public class ReviewAlerter {
             JdbcClient db,
             Mailer mailer,
             MailBudget budget,
-            @Value("${newsletter.review-alert-to:}") String alertTo,
+            @Value("${newsletter.posting-alert-to:}") String alertTo,
             @Value("${newsletter.site-url}") String siteUrl) {
         this.db = db;
         this.mailer = mailer;

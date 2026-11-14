@@ -80,9 +80,28 @@ newsletter:
   # schedule rather than at capture time because the capture happens in the web
   # app and delivery lives here -- a minute of latency on a confirmation is
   # nothing, and it keeps mail in one process.
-  # Where a submission waiting for review is announced. Unset means no alert is
-  # sent, and the queue is only found by someone opening it.
+  # The operator's inbox, for the few things that genuinely need a person.
+  # Since 12 Nov 2026 only the scope review's own failure alert uses it -- see
+  # `posting-alert-to` below and the comment in ScopeReviewer. Unset means those
+  # failures exist in the log and nowhere else.
   review-alert-to: ${REVIEW_ALERT_TO:}
+
+  # Where a submission waiting for review is announced, and deliberately EMPTY.
+  #
+  # This was `review-alert-to` until 12 Nov 2026, so every role an employer
+  # submitted sent the operator one message: 206 of the 211 submissions since
+  # 17 Oct were announced that way. The mail was never read for its content --
+  # /admin/postings is opened daily regardless, and the alert only repeated what
+  # the queue already said -- while each one spent a transactional send out of a
+  # Brevo allowance of 300 a day, the same pool the confirmations, the decision
+  # mails and the digest come out of.
+  #
+  # The mechanism is kept rather than deleted, because the reason it was built
+  # still holds for a queue nobody is watching: set POSTING_ALERT_TO and the
+  # alert is back exactly as it was. Note that nothing is stamped while this is
+  # empty, so the first run after setting it announces the entire backlog of
+  # PENDING submissions, twenty a minute until it is drained.
+  posting-alert-to: ${POSTING_ALERT_TO:}
 
   # The digest. Weekly, not daily: the subscription form promises "one message a
   # week", and a list that is mailed more often than it was told is a list that
@@ -226,6 +245,63 @@ posting-review:
   interval-ms: ${POSTING_REVIEW_INTERVAL_MS:60000}
   batch-size: ${POSTING_REVIEW_BATCH:10}
 
+# O aviso de decisão para o empregador: uma mensagem por empregador por sessão
+# de moderação, não uma por vaga.
+#
+# **`settle-minutes` é a coisa toda.** Uma decisão fica retida enquanto aquele
+# empregador tiver qualquer decisão ainda não avisada mais nova que esta
+# janela. Enquanto alguém está descendo a fila, nada sai; quando para, sai uma
+# mensagem com tudo. Vale para os dois caminhos de aprovação sem precisar saber
+# de nenhum: tanto o revisor do Gemini quanto a tela de admin só escrevem
+# `status` e `reviewed_at`, e a varredura é a mesma.
+#
+# O número vem do estrago medido: um empregador mandou **107 vagas**, e aprovar
+# 79 delas gerou **79 e-mails para o mesmo endereço numa tarde** -- 243 dos 300
+# envios do dia, com 28 submissões ainda na fila. Dez minutos de silêncio é
+# mais do que o intervalo entre dois cliques de quem está aprovando em série e
+# pouco o bastante para quem mandou uma vaga só não ficar esperando.
+#
+# Zero desliga a janela e volta ao comportamento antigo, um e-mail por decisão,
+# que é defensável num quadro que recebe uma submissão por semana.
+#
+# O `cron` só decide o tremor, não o agrupamento: a consulta vazia é um lookup
+# indexado, então rodar de minuto em minuto apenas faz a mensagem sair junto
+# com o fim da janela em vez de até dez minutos depois dele.
+employer:
+  decision-notice:
+    cron: ${DECISION_NOTICE_CRON:0 * * * * *}
+    settle-minutes: ${DECISION_NOTICE_SETTLE_MINUTES:10}
+    # Quantas vagas a mensagem lista antes de dizer "e outras N". O Gmail corta
+    # mensagem acima de ~102KB e troca o resto por um link; uma vaga listada dá
+    # uns 500 bytes de HTML, então 40 cabem com folga e as 107 do caso real
+    # sairiam cortadas no meio -- onde as últimas ficam menos visíveis do que se
+    # nunca tivessem sido listadas.
+    max-roles-listed: ${DECISION_NOTICE_MAX_LISTED:40}
+  # A varredura que tira do quadro a vaga publicada no Starter quando a
+  # assinatura por trás dela acaba, e que a devolve quando ela volta.
+  #
+  # De hora em hora, aos cinco. Nada aqui precisa ser pontual ao minuto: uma
+  # assinatura que terminou às 03:00 e um quadro que percebe às 04:05 diferem
+  # em uma hora numa coisa medida em meses. O que precisa é rodar com
+  # frequência suficiente para quem reassinou não ficar olhando um painel vazio
+  # se perguntando se funcionou, que é a direção que custa dinheiro.
+  plan-lapse:
+    cron: ${PLAN_LAPSE_CRON:0 5 * * * *}
+    # Escrever a linha é metade do trabalho: toda página onde a vaga aparece é
+    # pré-renderizada de hora em hora, então uma vaga pausada no banco continua
+    # sendo servida inteira -- descrição, botão de candidatar-se e os dados
+    # estruturados que a oferecem ao Google Jobs -- pela página construída
+    # antes da pausa. Medido durante a construção. A rota de candidatura recusa
+    # o clique porque é dinâmica e lê a linha, então ninguém consegue se
+    # candidatar; mas a vaga continua anunciada. Daí a chamada.
+    #
+    # Mesmo endereço e mesmo segredo da varredura de CV: o processo web na rede
+    # do compose, nunca o hostname público, porque isto não tem o que fazer
+    # saindo da máquina. Sem token, a chamada não acontece e as páginas se
+    # resolvem sozinhas dentro da hora.
+    web-url: ${PLAN_LAPSE_WEB_URL:http://web:3000}
+    token: ${INTERNAL_TASK_TOKEN:}
+
 # A leitura de cada candidatura contra o que a vaga pede: o que o Growth vende.
 #
 # Mesma credencial e mesmo modelo dos dois leitores acima -- não existe segunda
@@ -253,7 +329,7 @@ semantic:
   # um fato sobre generateContent, não sobre embeddings.
   embed-model: ${SEMANTIC_EMBED_MODEL:gemini-embedding-001}
   embed-location: ${SEMANTIC_EMBED_LOCATION:us-central1}
-  # 768 e não 3072: ver o comentário no construtor e a migração V64. Este
+  # 768 e não 3072: ver o comentário no construtor e a migração V67. Este
   # número e o `vector(768)` do schema têm de mudar juntos.
   dimensions: ${SEMANTIC_DIMENSIONS:768}
   web-url: ${SEMANTIC_WEB_URL:${SCREENING_WEB_URL:http://web:3000}}
@@ -303,7 +379,7 @@ screening:
   daily-cap: ${SCREENING_DAILY_CAP:2000}
   # Uma leitura que falhou volta para a fila, com espera crescente, até o teto.
   # Sem isso um blip de rede tirava a nota daquela pessoa para sempre -- ver o
-  # comentário de `attempts` na V58.
+  # comentário de `attempts` na V61.
   max-attempts: ${SCREENING_MAX_ATTEMPTS:3}
   retry-after-minutes: ${SCREENING_RETRY_AFTER_MINUTES:10}
   stale-after-minutes: ${SCREENING_STALE_AFTER_MINUTES:15}

@@ -232,9 +232,13 @@ public class ScopeReviewer {
             // which was deliberately left out and whose review is a separate
             // decision with its own bill.
             @Value("${scope-review.corpus-floor:2026-10-23}") String corpusFloor,
-            // Where a pass that is failing says so. Shares the moderation
-            // queue's address: one operator, one inbox, and an alert nobody
-            // configured separately is an alert nobody gets.
+            // Where a pass that is failing says so. This is the operator's
+            // inbox, and since 12 Nov 2026 it is the only thing left using it:
+            // the per-posting review alert moved to `posting-alert-to` and was
+            // switched off there, because the queue is opened daily anyway.
+            // This alert stays on, and the difference is the point -- it fires
+            // when something is broken, not when something is merely waiting,
+            // and nothing else would ever say so.
             @Value("${newsletter.review-alert-to:}") String alertTo) throws Exception {
         this.db = db;
         this.mailer = mailer;
