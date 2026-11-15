@@ -360,6 +360,65 @@ public class ApplicationScreener {
                 .update();
     }
 
+    /** One requirement's answer, after the rules that are not the model's. */
+    record Call(String verdict, String quote, String source) {}
+
+    /**
+     * What the reading actually records for one requirement.
+     *
+     * <p>Lifted out of the loop so it can be tested without a database, a
+     * model or an application: everything here is a way a wrong answer could
+     * otherwise become a verdict in front of an employer.
+     *
+     * <p><strong>A field answers for itself, and the model does not get a vote
+     * on it.</strong> The candidate declared which regimes they work under and
+     * the role declared the one it needs; comparing two declared facts is free,
+     * reproducible, and stops the reading contradicting something both sides
+     * stated.
+     *
+     * <p><strong>This application's answer beats the profile.</strong> The
+     * profile says what somebody accepts in general; the form asks again, for
+     * this role, prefilled. Somebody who ticked "full-time" while job hunting
+     * may well take this one on contract, and the reverse happens just as
+     * often. Reading the profile when there is an answer turns a general
+     * preference into a statement about one role — and marks as unmet somebody
+     * who would have said yes. The profile still answers for applications sent
+     * before the question existed.
+     *
+     * <p><strong>No quote, no claim.</strong> A verdict with nothing behind it
+     * is a guess wearing the clothes of a finding.
+     */
+    static Call decide(Requirement r, String verdict, String quote, String source,
+                       String answerKind, String profileKinds) {
+        if ("FIELD".equals(r.source()) && "EMPLOYMENT_KIND".equals(r.fieldCode())) {
+            boolean fromAnswer = answerKind != null && !answerKind.isBlank();
+            String declared = fromAnswer ? answerKind : (profileKinds == null ? "" : profileKinds);
+            if (declared.isBlank()) {
+                verdict = "UNKNOWN"; quote = ""; source = null;
+            } else {
+                boolean matches = false;
+                for (String kind : declared.split(",")) {
+                    if (r.text().contains(humanKind(kind.trim()))) { matches = true; break; }
+                }
+                verdict = matches ? "MET" : "UNMET";
+                /* The quote says where it came from, because the two sentences
+                   mean different things to whoever reads them: one is about
+                   this role, the other is about a sign-up form. */
+                quote = fromAnswer
+                        ? "Asked on this application, they answered: " + humanKind(declared.trim())
+                        : "Their profile says they work on: " + declared.replace(",", ", ");
+                source = fromAnswer ? "ANSWER" : "PROFILE";
+            }
+        }
+
+        if (!"UNKNOWN".equals(verdict) && quote.isBlank()) verdict = "UNKNOWN";
+        if (!List.of("MET", "UNMET", "UNKNOWN").contains(verdict)) verdict = "UNKNOWN";
+        if (source != null && !List.of("CV", "PROFILE", "ANSWER", "FIELD").contains(source)) {
+            source = null;
+        }
+        return new Call(verdict, quote, source);
+    }
+
     static String humanKind(String code) {
         return switch (code) {
             case "FULL_TIME" -> "full-time";
@@ -720,61 +779,19 @@ public class ApplicationScreener {
                     break;
                 }
 
-                /* A field answers for itself, and the model does not get a vote
-                   on it: the candidate declared these regimes and the role
-                   declared the one it needs. Free, reproducible, and it stops
-                   the reading contradicting a stated fact. */
-                if ("FIELD".equals(r.source()) && "EMPLOYMENT_KIND".equals(r.fieldCode())) {
-                    /* **A resposta desta candidatura vence o perfil.** O
-                       perfil diz o que a pessoa aceita em geral; o formulário
-                       pergunta de novo, já preenchido, o que ela aceita para
-                       esta vaga. Quem marcou "full-time" procurando emprego
-                       pode muito bem pegar esta por contrato, e o contrário
-                       acontece igual. Ler o perfil quando existe resposta é
-                       transformar uma preferência geral em afirmação sobre
-                       uma vaga -- e marcar como não atendido quem teria dito
-                       que sim. O perfil continua respondendo pelas
-                       candidaturas enviadas antes de a pergunta existir. */
-                    boolean fromAnswer = who.answerKind() != null && !who.answerKind().isBlank();
-                    String declared = fromAnswer
-                            ? who.answerKind()
-                            : (who.kinds() == null ? "" : who.kinds());
-                    if (declared.isBlank()) {
-                        verdict = "UNKNOWN"; quote = ""; source = null;
-                    } else {
-                        boolean matches = false;
-                        for (String kind : declared.split(",")) {
-                            if (r.text().contains(humanKind(kind.trim()))) { matches = true; break; }
-                        }
-                        verdict = matches ? "MET" : "UNMET";
-                        /* A citação diz de onde veio, porque as duas frases
-                           significam coisas diferentes para quem lê: uma é
-                           sobre esta vaga, a outra é sobre o cadastro. */
-                        quote = fromAnswer
-                                ? "Asked on this application, they answered: "
-                                  + humanKind(declared.trim())
-                                : "Their profile says they work on: "
-                                  + declared.replace(",", ", ");
-                        source = fromAnswer ? "ANSWER" : "PROFILE";
-                    }
-                }
+                Call call = decide(r, verdict, quote, source, who.answerKind(), who.kinds());
+                verdict = call.verdict();
+                quote = call.quote();
+                source = call.source();
 
-                // No quote, no claim. This is what keeps the reading from being
-                // a guess wearing the clothes of a finding.
-                if (!"UNKNOWN".equals(verdict) && quote.isBlank()) verdict = "UNKNOWN";
-                if (!List.of("MET", "UNMET", "UNKNOWN").contains(verdict)) verdict = "UNKNOWN";
-                if (source != null && !List.of("CV", "PROFILE", "ANSWER", "FIELD").contains(source)) {
-                    source = null;
-                }
-
-                double weight = r.essential() ? 2 : 1;
-                possible += weight;
-                if ("MET".equals(verdict)) points += weight;
-                // "Não sei" vale metade, e não zero: punir o silêncio como se
-                // fosse uma falha é a mesma coisa que tratar UNKNOWN como UNMET
-                // por outro caminho -- devagar, na nota, onde ninguém vê.
-                else if ("UNKNOWN".equals(verdict)) points += weight / 2;
-                else if (r.essential()) essentialMissed = true;
+                // O peso, o meio-ponto do "não sei" e o teto do essencial
+                // contrariado moram no `FitScore`, uma vez só: a mesma regra
+                // estava escrita aqui e no DiscoveryRanker, e duas cópias de
+                // uma regra de pontuação são duas chances de divergir na
+                // única coisa que o employer lê como julgamento.
+                possible += FitScore.weight(r.essential());
+                points += FitScore.credit(verdict, r.essential());
+                if (FitScore.capsTheScore(verdict, r.essential())) essentialMissed = true;
 
                 db.sql("""
                         insert into application_requirement_verdicts
@@ -790,13 +807,7 @@ public class ApplicationScreener {
                         .update();
             }
 
-            double score = possible == 0 ? 0 : (points / possible) * 10;
-            /* An essential requirement the material contradicts caps the score,
-               rather than merely costing its weight. Without this a candidate
-               who cannot do the one thing the role requires can still outrank
-               one who can, by being strong on everything else -- which is how a
-               ranking stops meaning what the employer reads it to mean. */
-            if (essentialMissed) score = Math.min(score, 4.0);
+            double score = FitScore.outOfTen(points, possible, essentialMissed);
 
             db.sql("""
                     update application_screenings
@@ -805,7 +816,7 @@ public class ApplicationScreener {
                            evaluated_at = now()
                      where id = :id
                     """)
-                    .param("score", Math.round(score * 10) / 10.0)
+                    .param("score", score)
                     .param("summary", summary.isBlank() ? null : cut(summary, 300))
                     // O que esta leitura custou. A extração de requisitos é
                     // por vaga e não por candidatura, então ela não entra

@@ -254,38 +254,16 @@ public class DiscoveryRanker {
             double possible = 0;
             boolean essentialMissed = false;
             for (Requirement r : requirements) {
-                String verdict = "UNKNOWN";
-                for (JsonNode v : root.path("verdicts")) {
-                    if (v.path("requirement").asInt(-1) == r.position()) {
-                        verdict = v.path("verdict").asText("UNKNOWN").toUpperCase();
-                        /* No quote, no claim -- the same rule the screening
-                           keeps, and for the same reason: a verdict with
-                           nothing behind it is a guess wearing the clothes of
-                           a finding. */
-                        if (!"UNKNOWN".equals(verdict)
-                                && v.path("basis").asText("").isBlank()) {
-                            verdict = "UNKNOWN";
-                        }
-                        break;
-                    }
-                }
-                if (!List.of("MET", "UNMET", "UNKNOWN").contains(verdict)) verdict = "UNKNOWN";
+                String verdict = verdictFor(root, r.position());
 
-                double weight = r.essential() ? 2 : 1;
-                possible += weight;
-                if ("MET".equals(verdict)) points += weight;
-                // "Não sei" vale metade, nunca zero: tratar silêncio como falha
-                // é punir o candidato pelo que o resumo não disse.
-                else if ("UNKNOWN".equals(verdict)) points += weight / 2;
-                else if (r.essential()) essentialMissed = true;
+                // Mesma regra do ApplicationScreener, agora literalmente a
+                // mesma: ver `FitScore`.
+                possible += FitScore.weight(r.essential());
+                points += FitScore.credit(verdict, r.essential());
+                if (FitScore.capsTheScore(verdict, r.essential())) essentialMissed = true;
             }
 
-            double score = possible == 0 ? 0 : (points / possible) * 10;
-            // Um essencial contrariado limita a nota em vez de só custar o
-            // peso dele, como no `ApplicationScreener`: sem isso, quem não sabe
-            // fazer a única coisa que a vaga exige ainda sobe por ser forte no
-            // resto, e o ranking deixa de significar o que o employer lê nele.
-            if (essentialMissed) score = Math.min(score, 4.0);
+            double score = FitScore.outOfTen(points, possible, essentialMissed);
 
             String summary = root.path("summary").asText("").trim();
             db.sql("""
@@ -295,7 +273,7 @@ public class DiscoveryRanker {
                            evaluated_at = now()
                      where id = :id
                     """)
-                    .param("score", Math.round(score * 10) / 10.0)
+                    .param("score", score)
                     .param("summary", summary.isBlank() ? null : summary)
                     .param("model", model)
                     .param("in", answer.tokensIn())
@@ -330,6 +308,37 @@ public class DiscoveryRanker {
     static class RateLimited extends RuntimeException {}
 
     /** Models wrap JSON in a fence often enough that trimming it is not a hack. */
+    /**
+     * What the model said about one requirement, cleaned before it counts.
+     *
+     * <p>Separated from the scoring loop so it can be read on its own and
+     * tested without a database or a model: everything it refuses is a way a
+     * wrong answer could become a number.
+     *
+     * <p><strong>No quote, no claim.</strong> A verdict with nothing behind it
+     * is a guess wearing the clothes of a finding, and the one that arrives
+     * with no `basis` is almost always the one the model inferred. Same rule
+     * the screening keeps.
+     *
+     * <p>A requirement the answer never mentions, or a verdict that is not one
+     * of the three, both land on UNKNOWN — which `FitScore` is careful to
+     * price at half rather than zero.
+     */
+    static String verdictFor(JsonNode root, int position) {
+        String verdict = "UNKNOWN";
+        for (JsonNode v : root.path("verdicts")) {
+            if (v.path("requirement").asInt(-1) == position) {
+                verdict = v.path("verdict").asText("UNKNOWN").toUpperCase();
+                if (!"UNKNOWN".equals(verdict) && v.path("basis").asText("").isBlank()) {
+                    verdict = "UNKNOWN";
+                }
+                break;
+            }
+        }
+        if (!List.of("MET", "UNMET", "UNKNOWN").contains(verdict)) verdict = "UNKNOWN";
+        return verdict;
+    }
+
     static String stripFence(String text) {
         String out = text.trim();
         if (out.startsWith("```")) {
