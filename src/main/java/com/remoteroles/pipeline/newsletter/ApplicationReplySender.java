@@ -48,16 +48,23 @@ public class ApplicationReplySender {
     private final Mailer mailer;
     private final MailBudget budget;
     private final int batch;
+    private final int maxAttempts;
 
     public ApplicationReplySender(
             JdbcClient db,
             Mailer mailer,
             MailBudget budget,
-            @Value("${employer.reply.batch-size:25}") int batch) {
+            @Value("${employer.reply.batch-size:25}") int batch,
+            /* How many refusals before a letter is given up on. Three, like
+               every other retry in this pipeline: enough to ride out a relay
+               that is down for a minute, few enough that a wrong address does
+               not get tried for ever. */
+            @Value("${employer.reply.max-attempts:3}") int maxAttempts) {
         this.db = db;
         this.mailer = mailer;
         this.budget = budget;
         this.batch = batch;
+        this.maxAttempts = maxAttempts;
     }
 
     /**
@@ -88,10 +95,12 @@ public class ApplicationReplySender {
                           join job_applications a on a.id = r.application_id
                           join candidates c on c.id = a.candidate_id
                          where r.sent_at is null and r.failed_at is null
+                           and r.attempts < :max
                          order by r.created_at
                          limit :batch
                         """)
                 .param("batch", batch)
+                .param("max", maxAttempts)
                 .query((rs, n) -> new Pending(
                         rs.getLong("id"),
                         rs.getString("to_address"),
@@ -127,7 +136,40 @@ public class ApplicationReplySender {
             db.sql("update application_replies set sent_at = now(), attempts = attempts + 1 where id = :id")
                     .param("id", row.id())
                     .update();
-            mailer.send(row.to(), row.subject(), row.body(), html(row.body()));
+
+            /* And unstamped when the provider refuses it.
+             *
+             * `send` answers whether it was accepted, and most callers here
+             * ignore that on purpose -- they are working through a batch and
+             * one bad address must not stop the rest. This one cannot ignore
+             * it. A row that says `sent_at` when nothing left the building
+             * tells the employer "Replied 15 Nov" on their screen and tells
+             * the candidate, through `stageForCandidate`, that they were not
+             * taken forward -- a decision they can read about in an email
+             * they never received. Measured on a laptop with a refusing
+             * relay: the row said sent, the log said "Authentication failed",
+             * and the two screens said the letter had gone.
+             *
+             * Clearing it puts the row back in the queue for the next pass,
+             * which is right for a relay that was briefly down; after
+             * `maxAttempts` it stops and says so, which is right for an
+             * address or a credential that is simply wrong. */
+            boolean accepted = mailer.send(row.to(), row.subject(), row.body(), html(row.body()));
+            if (!accepted) {
+                db.sql("""
+                        update application_replies
+                           set sent_at = null,
+                               failed_at = case when attempts >= :max then now() else null end,
+                               failure = case when attempts >= :max
+                                              then 'the mail provider refused it'
+                                              else null end
+                         where id = :id
+                        """)
+                        .param("max", maxAttempts)
+                        .param("id", row.id())
+                        .update();
+                continue;
+            }
             sent++;
         }
 
