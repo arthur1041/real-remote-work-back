@@ -268,6 +268,15 @@ posting-review:
 # indexado, então rodar de minuto em minuto apenas faz a mensagem sair junto
 # com o fim da janela em vez de até dez minutos depois dele.
 employer:
+  # A resposta que o employer escreveu para quem se candidatou. O site grava as
+  # linhas quando ele aperta enviar; isto é o carteiro. Rápido de propósito --
+  # a pessoa do outro lado está esperando notícia de uma candidatura, e vinte
+  # segundos é a diferença entre "respondeu" e "respondeu ontem".
+  reply:
+    cron: ${EMPLOYER_REPLY_CRON:*/20 * * * * *}
+    # Por passada, não por dia. O teto diário é o do MailBudget, e estas
+    # mensagens são TRANSACTIONAL: quem escreveu primeiro foi o candidato.
+    batch-size: ${EMPLOYER_REPLY_BATCH:25}
   decision-notice:
     cron: ${DECISION_NOTICE_CRON:0 * * * * *}
     settle-minutes: ${DECISION_NOTICE_SETTLE_MINUTES:10}
