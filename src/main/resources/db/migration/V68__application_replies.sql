@@ -35,12 +35,18 @@ create table employer_reply_templates (
      * divergem -- a caixa de entrada dizendo uma coisa e a pessoa tendo lido
      * outra.
      *
-     * Os três valores são os de `EMPLOYER_STAGES`: WITHDRAWN é declaração do
-     * candidato e NEW significa "ninguém abriu", nenhum dos dois é coisa que
-     * um envio possa afirmar.
+     * Os três valores de escrita são os de `EMPLOYER_STAGES`: WITHDRAWN é
+     * declaração do candidato e NEW significa "ninguém abriu", nenhum dos dois
+     * é coisa que um envio possa afirmar.
+     *
+     * `KEEP` é o quarto e não é uma etapa: quer dizer "não toque na marca".
+     * Existe porque nem toda resposta é um veredito -- pedir um horário, mandar
+     * o link da chamada, avisar que vai demorar -- e sem ele a única forma de
+     * responder sem decidir seria marcar READ, que **apaga** um shortlist que
+     * alguém tinha acabado de fazer.
      */
     stage       text not null default 'REJECTED'
-                check (stage in ('REJECTED', 'SHORTLISTED', 'READ')),
+                check (stage in ('REJECTED', 'SHORTLISTED', 'READ', 'KEEP')),
 
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()
