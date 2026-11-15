@@ -150,7 +150,27 @@ public class DiscoveryRanker {
                   from discovery_ranking_entries e
                   join discovery_rankings r on r.id = e.ranking_id
                   left join candidate_digests d on d.candidate_id = e.candidate_id
-                 where e.state = 'PENDING' and e.attempts < :max
+                 where e.attempts < :max
+                   and (
+                     e.state = 'PENDING'
+                     /*
+                      * Or skipped for want of a summary that now exists.
+                      *
+                      * The two queues run on their own clocks: the indexer
+                      * writes summaries every few minutes and this runs every
+                      * twenty seconds, so a list built in the minutes after
+                      * somebody signs up is a list of people with nothing to
+                      * read yet. Skipping them is right -- a score invented
+                      * from no material is worse than no score -- but leaving
+                      * them skipped for ever is not, and that is what happened
+                      * the first time the two were run together: every entry
+                      * of every list came back `no summary yet` and nothing
+                      * ever looked at them again. They keep their place from
+                      * the vectors either way; this is only about whether the
+                      * score arrives.
+                      */
+                     or (e.state = 'SKIPPED' and d.state = 'OK' and d.summary <> '')
+                   )
                  order by e.ranking_id, e.seed_rank
                  limit :batch
                 """)
@@ -192,6 +212,15 @@ public class DiscoveryRanker {
                     """).param("id", entry.id()).update();
             return;
         }
+
+        /* Coming back after a skip: the reason is no longer true, and a row
+           that scores while still carrying "no summary yet" is a row nobody
+           can read. */
+        db.sql("""
+                update discovery_ranking_entries
+                   set state = 'PENDING', failure = null
+                 where id = :id and state = 'SKIPPED'
+                """).param("id", entry.id()).update();
 
         List<Requirement> requirements = db.sql("""
                 select id, position, text, essential
