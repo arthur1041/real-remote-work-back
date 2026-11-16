@@ -721,10 +721,27 @@ public class ApplicationScreener {
                 .list();
     }
 
+    /**
+     * Quanto do disjuntor do dia já foi gasto, no quadro inteiro.
+     *
+     * <p><strong>Leitura copiada não conta.</strong> O disjuntor existe para
+     * limitar <em>gasto</em> -- está escrito assim onde ele é configurado, em
+     * dólares por dia -- e uma linha nascida de {@link #carryForward} não
+     * chamou o modelo nem custou um centavo: é a leitura anterior, copiada
+     * porque os requisitos da vaga não mudaram.
+     *
+     * <p>Sem este filtro um employer que salvasse a mesma vaga duas vezes com
+     * duzentas candidaturas gerava quatrocentas linhas num dia e derrubava o
+     * disjuntor de todo o quadro, com um aviso no log culpando um teto que
+     * nada tinha gasto. Os dois tetos por conta -- o do mês e o do dia -- já
+     * excluíam o carregado desde a V73; este, que é de outra consulta, tinha
+     * ficado para trás.
+     */
     int readToday() {
         Integer n = db.sql("""
                 select count(*) from application_screenings
                  where requested_at >= date_trunc('day', now())
+                   and carried_from is null
                 """).query(Integer.class).single();
         return n == null ? 0 : n;
     }
