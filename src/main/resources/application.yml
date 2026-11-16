@@ -385,6 +385,10 @@ screening:
   interval-ms: ${SCREENING_INTERVAL_MS:60000}
   batch-size: ${SCREENING_BATCH:20}
   reads-a-month: ${SCREENING_READS_A_MONTH:1000}
+  # Por conta, em 24 horas. O mensal não segura rajada: mil leituras cabem numa
+  # hora, e uma enxurrada contra a vaga de quem paga consome o mês antes de
+  # alguém notar. O que passa do teto é lido no dia seguinte.
+  reads-a-day: ${SCREENING_READS_A_DAY:250}
   daily-cap: ${SCREENING_DAILY_CAP:2000}
   # Uma leitura que falhou volta para a fila, com espera crescente, até o teto.
   # Sem isso um blip de rede tirava a nota daquela pessoa para sempre -- ver o

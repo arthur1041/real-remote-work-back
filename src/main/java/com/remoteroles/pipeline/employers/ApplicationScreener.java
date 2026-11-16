@@ -93,6 +93,7 @@ public class ApplicationScreener {
     private final int batchSize;
     private final int dailyCap;
     private final int readsAMonth;
+    private final int readsADay;
     private final int maxAttempts;
     private final int retryAfterMinutes;
     private final int staleAfterMinutes;
@@ -128,6 +129,19 @@ public class ApplicationScreener {
              * card reads.
              */
             @Value("${screening.reads-a-month:1000}") int readsAMonth,
+            /**
+             * Readings one account gets in any rolling day.
+             *
+             * <p>A quarter of the month, and it is the burst that the monthly
+             * ceiling does not bound: a thousand readings fit inside an hour.
+             * The case it is for is somebody pointing a script at a paying
+             * employer's role — fake accounts, real applications — which costs
+             * the attacker nothing and costs that employer their month. The
+             * busiest role on the board has had two applicants, so no honest
+             * day comes near this; what passes it is read the next day, and
+             * until then the application is on screen like any other.
+             */
+            @Value("${screening.reads-a-day:250}") int readsADay,
             /**
              * How many times one application may be read before giving up.
              *
@@ -176,6 +190,7 @@ public class ApplicationScreener {
         this.batchSize = batchSize;
         this.dailyCap = dailyCap;
         this.readsAMonth = readsAMonth;
+        this.readsADay = readsADay;
         this.maxAttempts = maxAttempts;
         this.retryAfterMinutes = retryAfterMinutes;
         this.staleAfterMinutes = staleAfterMinutes;
@@ -295,10 +310,140 @@ public class ApplicationScreener {
         for (Role role : rolesDue()) {
             try {
                 extract(role);
+                /* And, if the edit did not change what the role asks for, the
+                   readings that already answered that question. See
+                   `carryForward`: this is the difference between a typo
+                   costing one model call and costing one per applicant. */
+                int carried = carryForward(role);
+                if (carried > 0) {
+                    log.info("screening: posting {} v{} reused {} readings from the previous version",
+                            role.postingId(), role.contentVersion(), carried);
+                }
             } catch (Exception e) {
                 log.warn("requirements for posting {} failed: {}", role.postingId(), e.toString());
             }
         }
+    }
+
+    /**
+     * The readings of the previous version, when the new version asks the same.
+     *
+     * <p><strong>Why this exists.</strong> The queue is "an application with no
+     * reading <em>at this version of the text</em>", and `content_version`
+     * rises on every save of the posting — including a save that changed
+     * nothing, which is deliberate, because otherwise a referral could be
+     * walked past by pressing save again. What was not deliberate: on 15 Nov
+     * 2026, end to end, one edited line in a description sent every
+     * application to that posting back to the model. On a role with two
+     * applicants that is two readings; on a role with two hundred it is two
+     * hundred, about 38 cents and a fifth of the subscriber's monthly
+     * allowance, spent without anything on screen having offered the trade.
+     *
+     * <p><strong>What it compares.</strong> The requirement set itself — text,
+     * the essential flag, where it came from and which field answers it, in
+     * order. Not the description: an employer who rewrites three paragraphs
+     * and still asks for exactly the same five things has not changed the
+     * question, and the stored verdicts, each with the line they were taken
+     * from, still answer it. A changed requirement set re-reads as before,
+     * because then the question really is different.
+     *
+     * <p><strong>What a copy is worth.</strong> Tokens zero, because none were
+     * spent, and `carried_from` set, because the month's bill is the sum of
+     * the rows that did spend. The subscriber's monthly ceiling counts only
+     * rows with no `carried_from` for the same reason: a copy cost nothing
+     * and must not take one of their thousand.
+     *
+     * @return how many readings were reused.
+     */
+    int carryForward(Role role) {
+        Integer previous = db.sql("""
+                select max(content_version) from posting_requirements
+                 where posting_id = :posting and content_version < :version
+                """)
+                .param("posting", role.postingId())
+                .param("version", role.contentVersion())
+                .query(Integer.class)
+                .optional()
+                .orElse(null);
+        if (previous == null) return 0;
+
+        boolean same = Boolean.TRUE.equals(db.sql("""
+                select coalesce(
+                    (select array_agg(position || '|' || text || '|' || essential
+                                      || '|' || coalesce(source, '') || '|' || coalesce(field_code, '')
+                                      order by position)
+                       from posting_requirements
+                      where posting_id = :posting and content_version = :version)
+                    is not distinct from
+                    (select array_agg(position || '|' || text || '|' || essential
+                                      || '|' || coalesce(source, '') || '|' || coalesce(field_code, '')
+                                      order by position)
+                       from posting_requirements
+                      where posting_id = :posting and content_version = :previous)
+                , false)
+                """)
+                .param("posting", role.postingId())
+                .param("version", role.contentVersion())
+                .param("previous", previous)
+                .query(Boolean.class)
+                .single());
+        if (!same) return 0;
+
+        /* The readings first. Only the ones that finished: a FAILED or a
+           PENDING row from the old version is not an answer, and copying it
+           forward would hide the fact that this application was never read. */
+        int copied = db.sql("""
+                insert into application_screenings
+                      (application_id, content_version, state, score, summary, model,
+                       attempts, tokens_in, tokens_out, requested_at, evaluated_at, carried_from)
+                select g.application_id, :version, 'OK', g.score, g.summary, g.model,
+                       0, 0, 0, now(), now(), g.id
+                  from application_screenings g
+                  join job_applications a on a.id = g.application_id
+                 where a.posting_id = :posting
+                   and g.content_version = :previous
+                   and g.state = 'OK'
+                   and not exists (
+                       select 1 from application_screenings x
+                        where x.application_id = g.application_id
+                          and x.content_version = :version
+                   )
+                """)
+                .param("posting", role.postingId())
+                .param("version", role.contentVersion())
+                .param("previous", previous)
+                .update();
+        if (copied == 0) return 0;
+
+        /* Then the verdicts, matched requirement to requirement by position --
+           which is safe precisely because the sets were just proved identical.
+           `disputed_at` travels too: an employer who marked a verdict wrong
+           said so about a judgement that has not changed. */
+        db.sql("""
+                insert into application_requirement_verdicts
+                      (screening_id, requirement_id, verdict, basis, basis_source, disputed_at)
+                select n.id, rn.id, v.verdict, v.basis, v.basis_source, v.disputed_at
+                  from application_screenings n
+                  join application_screenings o on o.id = n.carried_from
+                  join application_requirement_verdicts v on v.screening_id = o.id
+                  join posting_requirements ro on ro.id = v.requirement_id
+                  join posting_requirements rn
+                    on rn.posting_id = ro.posting_id
+                   and rn.content_version = :version
+                   and rn.position = ro.position
+                  join job_applications a on a.id = n.application_id
+                 where a.posting_id = :posting
+                   and n.content_version = :version
+                   and n.carried_from is not null
+                   and not exists (
+                       select 1 from application_requirement_verdicts w
+                        where w.screening_id = n.id and w.requirement_id = rn.id
+                   )
+                """)
+                .param("posting", role.postingId())
+                .param("version", role.contentVersion())
+                .update();
+        return copied;
     }
 
     void extract(Role role) {
@@ -509,18 +654,56 @@ public class ApplicationScreener {
                               )
                           )
                    )
-                   -- O teto do assinante, no mês corrente.
+                   -- O teto do assinante, no mês corrente. Conta só as
+                   -- leituras que gastaram modelo: uma linha copiada de uma
+                   -- versão anterior (`carried_from`) não custou chamada
+                   -- nenhuma e não pode tomar uma das mil.
                    and (
                        select count(*) from application_screenings g2
                          join job_applications a2 on a2.id = g2.application_id
                          join employer_postings p2 on p2.id = a2.posting_id
                         where p2.employer_id = p.employer_id
                           and g2.requested_at >= date_trunc('month', now())
+                          and g2.carried_from is null
                    ) < :reads
+                   /* **O teto do dia, por conta.**
+                      
+                      O mensal sozinho não segura uma rajada: mil leituras
+                      cabem numa hora, e uma enxurrada de candidaturas falsas
+                      contra uma vaga de quem paga consome o mês inteiro antes
+                      de alguém notar. Um quarto do mês por dia é mais do que
+                      qualquer dia honesto precisa -- a vaga mais movimentada
+                      do quadro recebeu duas candidaturas -- e transforma
+                      "seu mês acabou numa hora" em "houve um dia estranho".
+                      As candidaturas que passarem do teto não somem: são lidas
+                      no dia seguinte, e até lá o employer as vê na tela do
+                      mesmo jeito que via antes disto existir. */
+                   and (
+                       select count(*) from application_screenings g3
+                         join job_applications a3 on a3.id = g3.application_id
+                         join employer_postings p3 on p3.id = a3.posting_id
+                        where p3.employer_id = p.employer_id
+                          and g3.requested_at >= now() - interval '24 hours'
+                          and g3.carried_from is null
+                   ) < :readsADay
+                   /* **Um endereço que nunca respondeu a um código não é
+                      lido.**
+                      
+                      A candidatura chega, aparece na tela do employer e pode
+                      ser respondida à mão como sempre; o que espera é a
+                      leitura paga. A razão é o único ataque que fecha a conta
+                      para quem ataca: criar contas de candidato em massa e
+                      disparar candidaturas contra a vaga de um assinante
+                      queima a cota dele e o nosso Vertex, e cada conta dessas
+                      custa ao atacante um endereço de e-mail que funcione.
+                      A descoberta já exige endereço confirmado para mostrar
+                      alguém; isto põe a leitura na mesma régua. */
+                   and c.email_verified_at is not null
                  order by a.created_at
                  limit :batch
                 """)
                 .param("reads", readsAMonth)
+                .param("readsADay", readsADay)
                 .param("attempts", maxAttempts)
                 .param("backoff", retryAfterMinutes)
                 .param("stale", staleAfterMinutes)
