@@ -1,5 +1,6 @@
 package com.remoteroles.pipeline.newsletter;
 
+import com.remoteroles.pipeline.normalize.Text;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -172,7 +173,7 @@ public class CvRequestSender {
             return "there";
         }
         String first = full.trim().split("\\s+")[0];
-        return first.length() > 40 ? first.substring(0, 40) : first;
+        return Text.cut(first, 40);
     }
 
     private String optOutUrl(String token) {

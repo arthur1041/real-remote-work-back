@@ -1,5 +1,6 @@
 package com.remoteroles.pipeline.ingest;
 
+import com.remoteroles.pipeline.normalize.Text;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -177,6 +178,6 @@ public class ResumeRetentionJob {
             return "";
         }
         String oneLine = body.replaceAll("\\s+", " ").trim();
-        return oneLine.length() <= 200 ? oneLine : oneLine.substring(0, 200);
+        return Text.cut(oneLine, 200);
     }
 }

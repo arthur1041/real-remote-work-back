@@ -1,5 +1,6 @@
 package com.remoteroles.pipeline.employers;
 
+import com.remoteroles.pipeline.normalize.Text;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -848,8 +849,8 @@ public class SemanticIndexer {
         return cut(text, MAX_CHARS);
     }
 
+    /** Delegates, so the surrogate rule lives in one place. See {@link Text}. */
     static String cut(String text, int max) {
-        if (text == null) return "";
-        return text.length() <= max ? text : text.substring(0, max);
+        return Text.cut(text, max);
     }
 }
