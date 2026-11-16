@@ -274,6 +274,17 @@ public class PostingReviewer {
                    -- candidaturas -- para um endereço que ninguém provou.
                    -- A vaga não é recusada: espera uma pessoa, como antes.
                    and e.email_verified_at is not null
+                   -- E a conta precisa estar em pé AGORA, pela mesma razão.
+                   -- Suspender é o operador dizendo que esta conta não devia
+                   -- estar agindo no board; publicar uma vaga dela minutos
+                   -- depois, sem ninguém olhar, é justamente o que a suspensão
+                   -- queria impedir -- e as candidaturas iriam para um
+                   -- endereço que não consegue nem entrar para lê-las.
+                   -- Conferido em 16 Nov 2026: com a conta em SUSPENDED esta
+                   -- consulta devolvia a vaga pendente normalmente.
+                   -- A vaga não é recusada: espera, e volta à fila sozinha se
+                   -- a suspensão for levantada.
+                   and e.status = 'ACTIVE'
                    -- Not read *at this version*. The stamp used to be a column
                    -- that an edit had to remember to clear; now the question is
                    -- asked of the record itself, so a resubmission is eligible
