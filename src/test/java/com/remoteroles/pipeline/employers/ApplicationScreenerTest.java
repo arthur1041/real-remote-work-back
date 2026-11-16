@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -141,5 +143,57 @@ class ApplicationScreenerTest {
         assertEquals("", ApplicationScreener.cut(null, 10));
         assertEquals("abcde", ApplicationScreener.cut("abcdefgh", 5));
         assertEquals("abc", ApplicationScreener.cut("abc", 5));
+    }
+
+    @Nested
+    @DisplayName("de que texto os requisitos saíram")
+    class SourceHash {
+
+        private ApplicationScreener.Role role(String title, String description, String kind) {
+            return new ApplicationScreener.Role(1L, 1, title, description, kind);
+        }
+
+        @Test
+        @DisplayName("o título não entra: editá-lo não é uma pergunta nova")
+        void titleIsNotPartOfTheQuestion() {
+            /* O que custa estar errado aqui: com o título dentro, corrigir uma
+               digitação nele relê todas as candidaturas da vaga a preço cheio.
+               Foi assim que o defeito de 16 Nov 2026 apareceu. */
+            assertEquals(
+                    ApplicationScreener.sourceHash(role("Platform Engineer", "Kubernetes, Go.", "FULL_TIME")),
+                    ApplicationScreener.sourceHash(role("Platform Engineer (SRE)", "Kubernetes, Go.", "FULL_TIME")));
+        }
+
+        @Test
+        @DisplayName("a descrição entra: mudá-la é uma pergunta nova")
+        void descriptionIsTheQuestion() {
+            assertNotEquals(
+                    ApplicationScreener.sourceHash(role("X", "Kubernetes, Go.", "FULL_TIME")),
+                    ApplicationScreener.sourceHash(role("X", "Kubernetes, Go, Rust.", "FULL_TIME")));
+        }
+
+        @Test
+        @DisplayName("o tipo de contratação entra, porque gera um requisito")
+        void employmentKindIsPartOfIt() {
+            assertNotEquals(
+                    ApplicationScreener.sourceHash(role("X", "Kubernetes.", "FULL_TIME")),
+                    ApplicationScreener.sourceHash(role("X", "Kubernetes.", "CONTRACT")));
+        }
+
+        @Test
+        @DisplayName("os dois campos não se confundem um com o outro")
+        void theTwoFieldsCannotBleed() {
+            /* Sem um separador que nenhum dos dois contém, "ab" + "c" e "a" +
+               "bc" seriam a mesma vaga. */
+            assertNotEquals(
+                    ApplicationScreener.sourceHash(role("X", "Kubernetes", "FULL")),
+                    ApplicationScreener.sourceHash(role("X", "KubernetesFULL", "")));
+        }
+
+        @Test
+        @DisplayName("nulos não explodem: uma vaga sem descrição ainda tem hash")
+        void nullsAreNotAnError() {
+            assertNotNull(ApplicationScreener.sourceHash(role(null, null, null)));
+        }
     }
 }

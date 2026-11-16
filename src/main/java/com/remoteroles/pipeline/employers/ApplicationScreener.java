@@ -4,11 +4,15 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 
@@ -446,7 +450,32 @@ public class ApplicationScreener {
         return copied;
     }
 
+    /**
+     * O que esta vaga exige, extraído uma vez por versão -- e não por versão.
+     *
+     * <p><strong>Antes de perguntar, verifica se já perguntou isto.</strong>
+     * Medido em 16 Nov 2026: uma vaga teve o título editado, a descrição
+     * intacta, e as três candidaturas foram relidas a preço cheio. O modelo
+     * havia reescrito um requisito de nove -- "Professional English" virou
+     * "Professional English, written and spoken" -- e o {@link #carryForward},
+     * que compara os conjuntos como texto, viu dois conjuntos diferentes.
+     *
+     * <p>A raiz não era a comparação, era extrair de novo. Um modelo não é
+     * determinístico; pedir duas vezes a mesma coisa devolve duas redações, e
+     * a segunda invalida todas as leituras guardadas. Se a descrição e o tipo
+     * de contratação não mudaram, a pergunta não mudou: os requisitos da
+     * versão anterior são copiados e nada é perguntado. Isso economiza a
+     * chamada da extração e, por ser idêntico byte a byte, é o que faz o
+     * carry-forward disparar -- antes disto ele dependia de o modelo repetir-se
+     * por acaso.
+     *
+     * <p>O título fica fora do hash. Ele entra no prompt como contexto, mas
+     * quem decide o que se exige é a descrição, e deixá-lo dentro faria um
+     * erro de digitação no título custar uma leitura por candidatura.
+     */
     void extract(Role role) {
+        if (copyRequirements(role)) return;
+
         List<String[]> found = new ArrayList<>();
 
         String text = role.description() == null ? "" : role.description();
@@ -487,12 +516,78 @@ public class ApplicationScreener {
         }
     }
 
+    /**
+     * O que gerou um conjunto de requisitos, para a próxima versão reconhecer.
+     *
+     * <p>Descrição e tipo de contratação, separados por um byte que nenhum dos
+     * dois contém -- sem ele, mover uma palavra da ponta de um para o começo do
+     * outro daria o mesmo hash. Ver {@link #extract} para por que o título não
+     * está aqui.
+     */
+    static String sourceHash(Role role) {
+        String body = (role.description() == null ? "" : role.description())
+                + '\u0000'
+                + (role.employmentKind() == null ? "" : role.employmentKind());
+        try {
+            byte[] sum = MessageDigest.getInstance("SHA-256")
+                    .digest(body.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(sum);
+        } catch (NoSuchAlgorithmException e) {
+            /* SHA-256 é obrigatório em toda JVM. Se faltasse, o certo é
+               extrair de novo e não travar a fila. */
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * Copia os requisitos da última versão que saiu do mesmo texto.
+     *
+     * @return true quando copiou, e então nada precisa ser perguntado.
+     */
+    private boolean copyRequirements(Role role) {
+        String hash = sourceHash(role);
+        Integer previous = db.sql("""
+                select max(content_version) from posting_requirements
+                 where posting_id = :posting
+                   and content_version < :version
+                   and source_hash = :hash
+                """)
+                .param("posting", role.postingId())
+                .param("version", role.contentVersion())
+                .param("hash", hash)
+                .query(Integer.class)
+                .optional()
+                .orElse(null);
+        if (previous == null) return false;
+
+        int copied = db.sql("""
+                insert into posting_requirements
+                  (posting_id, content_version, position, text, essential, source,
+                   field_code, source_hash)
+                select posting_id, :version, position, text, essential, source,
+                       field_code, source_hash
+                  from posting_requirements
+                 where posting_id = :posting and content_version = :previous
+                on conflict (posting_id, content_version, position) do nothing
+                """)
+                .param("posting", role.postingId())
+                .param("version", role.contentVersion())
+                .param("previous", previous)
+                .update();
+        if (copied > 0) {
+            log.info("screening: posting {} v{} asks the same as v{}, {} requirements reused",
+                    role.postingId(), role.contentVersion(), previous, copied);
+        }
+        return copied > 0;
+    }
+
     private void insertRequirement(Role role, int position, String text, boolean essential,
                                    String source, String fieldCode) {
         db.sql("""
                 insert into posting_requirements
-                  (posting_id, content_version, position, text, essential, source, field_code)
-                values (:posting, :version, :position, :text, :essential, :source, :field)
+                  (posting_id, content_version, position, text, essential, source, field_code,
+                   source_hash)
+                values (:posting, :version, :position, :text, :essential, :source, :field, :hash)
                 on conflict (posting_id, content_version, position) do nothing
                 """)
                 .param("posting", role.postingId())
@@ -502,6 +597,7 @@ public class ApplicationScreener {
                 .param("essential", essential)
                 .param("source", source)
                 .param("field", fieldCode)
+                .param("hash", sourceHash(role))
                 .update();
     }
 
