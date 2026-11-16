@@ -263,26 +263,27 @@ public class ApplicationScreener {
                    and s.plan = 'GROWTH'
                    and s.status in ('ACTIVE', 'CANCELLED')
                    and s.expires_at > now()
-                   /* Ainda não lida nesta versão -- ou lida sem resposta.
+                   /* Ainda não perguntada nesta versão -- ou perguntada sem
+                      resposta.
                       
-                      `source_hash` nulo quer dizer que a extração desta versão
-                      não obteve resposta do modelo: rede fora, tempo esgotado,
-                      JSON ilegível. O que ficou gravado foi só o requisito de
-                      campo, e a vaga passa a ser lida contra ele e mais nada.
-                      Sem esta segunda condição isso esperaria o employer
-                      editar a vaga para ser tentado de novo, e um minuto de
-                      indisponibilidade viraria uma vaga mal lida por semanas.
-                      Com ela, a passada seguinte tenta outra vez sozinha.
+                      A pergunta é sobre a vaga e não sobre as linhas que
+                      sobraram, porque "nenhum requisito" é uma resposta
+                      legítima e não deixa linha nenhuma: o prompt manda
+                      devolver lista vazia quando a vaga não exige nada, e o
+                      requisito de campo só existe se o employer escolheu um
+                      tipo de contratação, que é opcional. Enquanto esta
+                      condição olhava as linhas, uma vaga assim ficava devida
+                      para sempre e o modelo era perguntado uma vez por minuto
+                      -- 1.440 vezes por dia, sem teto que segurasse, porque o
+                      disjuntor conta leituras de candidatura e não extrações.
+                      Reproduzido em 16 Nov 2026.
                       
-                      Não vira laço: uma tentativa que responde grava o hash e
-                      sai da fila, e uma que não responde é a mesma chamada que
-                      a fila já faria uma vez por versão. */
-                   and not exists (
-                       select 1 from posting_requirements r
-                        where r.posting_id = p.id
-                          and r.content_version = p.content_version
-                          and r.source_hash is not null
-                   )
+                      `requirements_version` só é escrita quando houve
+                      resposta, então uma extração que falhou continua devida e
+                      é tentada na passada seguinte -- um minuto de
+                      indisponibilidade deixa de custar uma vaga lida contra
+                      requisito nenhum até alguém editá-la. */
+                   and p.requirements_version is distinct from p.content_version
                  order by p.created_at
                  limit :batch
                 """)
@@ -582,6 +583,20 @@ public class ApplicationScreener {
             insertRequirement(role, position,
                     "Works on a " + humanKind(role.employmentKind()) + " basis",
                     true, "FIELD", "EMPLOYMENT_KIND", hash);
+        }
+
+        /* Por último, e só se houve resposta: é isto que tira a vaga da fila.
+           Escrito mesmo quando não sobrou requisito nenhum, porque "nenhum" é
+           uma resposta -- ver a condição em `rolesDue`. */
+        if (answered) {
+            db.sql("""
+                    update employer_postings
+                       set requirements_version = :version
+                     where id = :posting
+                    """)
+                    .param("version", role.contentVersion())
+                    .param("posting", role.postingId())
+                    .update();
         }
     }
 

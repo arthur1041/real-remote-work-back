@@ -61,3 +61,35 @@ update posting_requirements r
  where p.id = r.posting_id
    and r.content_version = p.content_version
    and r.source_hash is null;
+
+-- **Em que versão os requisitos desta vaga foram perguntados.**
+--
+-- A fila dizia "devida é a versão sem requisito nenhum", e isso não distingue
+-- duas coisas muito diferentes: ninguém perguntou ainda, e perguntou-se e a
+-- resposta foi *nenhum requisito*. A segunda é legítima -- o prompt manda
+-- devolver lista vazia quando a vaga não exige nada, e o requisito de campo só
+-- existe quando o employer escolheu um tipo de contratação, que é opcional no
+-- formulário.
+--
+-- Juntas, as duas condições davam um laço: a vaga ficava devida para sempre e
+-- o modelo era perguntado uma vez por minuto, 1.440 vezes por dia, sem que
+-- nada aparecesse no banco para interromper. Nenhum teto segura isso: o
+-- disjuntor diário conta leituras de candidatura, não extrações.
+-- Reproduzido em 16 Nov 2026 com uma descrição sem exigências e sem tipo de
+-- contratação.
+--
+-- Esta coluna responde a pergunta certa. É escrita só quando houve resposta,
+-- de modo que uma extração que falhou continua devida e é tentada de novo --
+-- e uma que respondeu "nada" para de ser perguntada até o texto mudar.
+alter table employer_postings add column requirements_version integer;
+
+comment on column employer_postings.requirements_version is
+    'content_version cuja extração de requisitos obteve resposta. Diferente de content_version significa que a fila ainda tem o que perguntar.';
+
+-- As que já têm requisitos na versão corrente já foram perguntadas.
+update employer_postings p
+   set requirements_version = p.content_version
+ where exists (
+     select 1 from posting_requirements r
+      where r.posting_id = p.id and r.content_version = p.content_version
+ );
