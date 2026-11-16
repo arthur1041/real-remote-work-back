@@ -366,8 +366,14 @@ public class PostingDecisionSender {
         } else {
             StringBuilder fields = new StringBuilder();
             for (Decided row : listed) {
-                fields.append(EmailLayout.field(
-                        EmailLayout.escape(row.title()), EmailLayout.escape(note(row))));
+                /* The title raw, the reason escaped, and that asymmetry is
+                   `EmailLayout.field`'s: it escapes the label itself and takes
+                   the value as markup. Escaping the title here too put the
+                   entity in front of the employer -- "Sales &amp;amp;
+                   Partnerships" for a role called "Sales & Partnerships", and
+                   two of this board's own categories are spelt with an
+                   ampersand. */
+                fields.append(EmailLayout.field(row.title(), EmailLayout.escape(note(row))));
             }
             card = EmailLayout.eyebrow("Not published")
                     + EmailLayout.heading("%d submissions were turned down"

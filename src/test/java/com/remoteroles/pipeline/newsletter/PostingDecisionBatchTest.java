@@ -187,6 +187,28 @@ class PostingDecisionBatchTest {
         }
 
         @Test
+        @DisplayName("an ampersand in a title is escaped once, not twice")
+        void titleEscapedOnce() {
+            /* `EmailLayout.field` escapes its own label -- it has to, it is the
+               only thing between a typed title and the markup -- and the caller
+               escaped it first. Two escapes put the entity itself in front of
+               the employer: "Sales &amp;amp; Partnerships" where their role is
+               called "Sales & Partnerships". Measured on 16 Nov 2026: that is
+               exactly what the rejection mail carried.
+
+               Ampersands are not an edge case in job titles. Two of this
+               board's own twelve categories are spelt with one. */
+            List<Decided> group = List.of(
+                    rejected(1, 105, "Sales & Partnerships Lead", "Not published."),
+                    rejected(2, 105, "Data & AI Engineer", "Not published."));
+            String html = sender.html(group);
+
+            assertTrue(html.contains("Sales &amp; Partnerships Lead"),
+                    "the title should be escaped once");
+            assertFalse(html.contains("&amp;amp;"), "the title was escaped twice");
+        }
+
+        @Test
         @DisplayName("a rejection whose reason was never typed still reads as a reason")
         void emptyNoteFallsBack() {
             List<Decided> group = List.of(
