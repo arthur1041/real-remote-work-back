@@ -196,4 +196,40 @@ class ApplicationScreenerTest {
             assertNotNull(ApplicationScreener.sourceHash(role(null, null, null)));
         }
     }
+
+    @Nested
+    @DisplayName("o requisito de regime")
+    class RequirementForKind {
+
+        @Test
+        @DisplayName("o artigo segue a palavra, e estágio começa por vogal")
+        void articleFollowsTheWord() {
+            /* "Works on a internship basis" era o que a vaga de estágio
+               publicada pelo formulário mostrava na lista de requisitos, na
+               quebra requisito a requisito e no CSV. */
+            assertEquals("Works on an internship basis",
+                    ApplicationScreener.requirementForKind("INTERNSHIP"));
+            assertEquals("Works on a full-time basis",
+                    ApplicationScreener.requirementForKind("FULL_TIME"));
+            assertEquals("Works on a contract basis",
+                    ApplicationScreener.requirementForKind("CONTRACT"));
+        }
+
+        @Test
+        @DisplayName("a palavra sobrevive, que é o que o teste de regime procura")
+        void theWordItselfIsUnchanged() {
+            for (String code : new String[]{
+                    "FULL_TIME", "PART_TIME", "CONTRACT", "TEMPORARY", "INTERNSHIP", "VOLUNTEER"}) {
+                assertTrue(ApplicationScreener.requirementForKind(code)
+                        .contains(ApplicationScreener.humanKind(code)), code);
+            }
+        }
+
+        @Test
+        @DisplayName("um código desconhecido ainda produz uma frase")
+        void unknownCodeStillReads() {
+            assertEquals("Works on a seasonal basis",
+                    ApplicationScreener.requirementForKind("SEASONAL"));
+        }
+    }
 }

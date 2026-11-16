@@ -581,7 +581,7 @@ public class ApplicationScreener {
            Added last so it reads after what the description itself said. */
         if (role.employmentKind() != null && !role.employmentKind().isBlank()) {
             insertRequirement(role, position,
-                    "Works on a " + humanKind(role.employmentKind()) + " basis",
+                    requirementForKind(role.employmentKind()),
                     true, "FIELD", "EMPLOYMENT_KIND", hash);
         }
 
@@ -750,6 +750,26 @@ public class ApplicationScreener {
             source = null;
         }
         return new Call(verdict, quote, source);
+    }
+
+    /**
+     * O requisito de regime, escrito em inglês que se possa ler.
+     *
+     * <p>O artigo sai do som e não de uma constante: dos seis regimes, um
+     * começa por vogal, e a frase era montada com "a" fixo. Uma vaga de
+     * estágio publicada pelo formulário -- que oferece "Internship" -- gerava
+     * "Works on a internship basis", e essa frase não fica escondida: ela é um
+     * dos requisitos listados na tela do empregador, aparece na quebra
+     * requisito a requisito de cada candidatura e vai no CSV exportado.
+     *
+     * <p>O teste de regime continua funcionando porque ele procura a palavra
+     * dentro da frase, e a palavra não mudou -- ver o laço que compara os
+     * regimes que o candidato aceita.
+     */
+    static String requirementForKind(String code) {
+        String kind = humanKind(code);
+        String article = "aeiou".indexOf(Character.toLowerCase(kind.charAt(0))) >= 0 ? "an" : "a";
+        return "Works on " + article + " " + kind + " basis";
     }
 
     static String humanKind(String code) {
