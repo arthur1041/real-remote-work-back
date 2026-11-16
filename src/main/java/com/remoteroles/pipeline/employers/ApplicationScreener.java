@@ -740,8 +740,12 @@ public class ApplicationScreener {
         }
 
         if (answer == null) {
-            fail(screeningId, "The reading could not be completed. Nothing about this "
-                    + "application has been assumed.");
+            /* The cause, and only the cause. The screen that shows this adds
+               "Nothing about this application has been assumed" itself, and
+               while this string carried that sentence too the employer read
+               it twice in a row -- seen end to end on 15 Nov 2026. One
+               sentence, one owner. */
+            fail(screeningId, "The model did not answer.");
             return;
         }
 
@@ -828,7 +832,13 @@ public class ApplicationScreener {
                     .param("id", screeningId)
                     .update();
         } catch (Exception e) {
-            fail(screeningId, "The answer could not be read: " + e.getMessage() + ".");
+            /* The parser's own message never reaches the employer's screen.
+               It is a Jackson error about a byte offset: it tells the person
+               reading applications nothing, and it is the kind of string that
+               carries a fragment of whatever came back. Logged in full, shown
+               as what it means. */
+            log.warn("screening: unreadable answer for screening {}", screeningId, e);
+            fail(screeningId, "The answer came back in a shape this could not read.");
         }
     }
 
