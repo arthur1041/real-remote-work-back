@@ -313,19 +313,78 @@ public class SemanticIndexer {
 
         /* Roles, on the same terms. A posting is summarised once per version
            of its text, and only while it is live: a closed role is a question
-           nobody is asking. */
+           nobody is asking.
+           
+           **Copiado antes de ser enfileirado.** Uma versão nova cujo texto é o
+           mesmo -- salário acrescentado, data de encerramento posta, pergunta
+           nova no formulário -- tem o mesmo resumo e o mesmo vetor, e pedi-los
+           outra vez custa duas coisas: uma chamada ao modelo, gasta de um teto
+           diário que estas duas filas dividem, e a janela até ela voltar, em
+           que a descoberta daquela vaga cai no caminho das palavras. A V76
+           carrega o que decide o resumo; igual quer dizer que não há o que
+           resumir. Mesma forma da V74 para os requisitos e da V75 para a
+           lista. */
+        int carregados = db.sql("""
+                insert into posting_digests
+                      (posting_id, content_version, summary, embedding, digest_model,
+                       embed_model, tokens_in, tokens_out, state, digested_at,
+                       embedded_at, source_hash)
+                select p.id, p.content_version, d.summary, d.embedding, d.digest_model,
+                       d.embed_model, 0, 0, 'OK', d.digested_at, d.embedded_at, d.source_hash
+                  from employer_postings p
+                  left join jobs j on j.id = p.job_id
+                  join lateral (
+                    select d.* from posting_digests d
+                     where d.posting_id = p.id
+                       and d.content_version < p.content_version
+                       and d.state = 'OK'
+                       and d.source_hash is not null
+                       and d.source_hash = %s
+                     order by d.content_version desc
+                     limit 1
+                  ) d on true
+                 where p.status = 'APPROVED'
+                   and (p.job_id is null or j.closed_at is null)
+                on conflict (posting_id, content_version) do nothing
+                """.formatted(DIGEST_SOURCE_HASH))
+                .update();
+        if (carregados > 0) {
+            log.info("semantic: {} roles ask the same as before, summary reused", carregados);
+        }
+
         int postings = db.sql("""
-                insert into posting_digests (posting_id, content_version, summary, state)
-                select p.id, p.content_version, '', 'PENDING'
+                insert into posting_digests (posting_id, content_version, summary, state, source_hash)
+                select p.id, p.content_version, '', 'PENDING', %s
                   from employer_postings p
                   left join jobs j on j.id = p.job_id
                  where p.status = 'APPROVED'
                    and (p.job_id is null or j.closed_at is null)
                 on conflict (posting_id, content_version) do nothing
-                """)
+                """.formatted(DIGEST_SOURCE_HASH))
                 .update();
         if (postings > 0) log.info("semantic: {} roles due a summary", postings);
     }
+
+    /**
+     * O que alimenta o resumo de uma vaga, como expressão SQL.
+     *
+     * <p>Uma definição só, usada por quem copia e por quem enfileira, para que
+     * as duas não possam divergir. As colunas são as que entram no texto
+     * mandado ao modelo em {@link #digestPosting}: título, categoria, regime,
+     * elegibilidade e descrição. Os requisitos também entram no texto, mas não
+     * aqui -- eles são derivados da descrição e já viajam com ela pela V74, e
+     * incluí-los faria o resumo esperar a extração para poder ser copiado.
+     *
+     * <p>chr(1) pela razão da V74: `text` no Postgres recusa o caractere nulo.
+     */
+    private static final String DIGEST_SOURCE_HASH = """
+            encode(sha256(convert_to(
+              coalesce(p.title,'') || chr(1) ||
+              coalesce(p.category,'') || chr(1) ||
+              coalesce(p.employment_kind,'') || chr(1) ||
+              coalesce(p.geo_scope,'') || chr(1) ||
+              coalesce(p.geo_detail,'') || chr(1) ||
+              coalesce(p.description_source,''), 'UTF8')), 'hex')""";
 
     /* ------------------------------------------------------------ summaries */
 
