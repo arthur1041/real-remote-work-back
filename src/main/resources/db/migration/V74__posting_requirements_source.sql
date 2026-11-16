@@ -25,3 +25,39 @@ alter table posting_requirements add column source_hash text;
 
 comment on column posting_requirements.source_hash is
     'SHA-256 de description_source + employment_kind. Igual ao da versão anterior significa que não há nada a extrair de novo.';
+
+-- **O carimbo nas linhas que já existem.**
+--
+-- Sem isto, `rolesDue` -- que passou a considerar lida só a versão com hash --
+-- veria toda vaga de assinante como nunca extraída, e no primeiro minuto
+-- depois do deploy extrairia todas de novo. Cada reextração é uma chamada ao
+-- modelo e, se a redação sair diferente, uma releitura por candidatura: o
+-- gasto exato que esta migração existe para evitar, cobrado uma vez no deploy.
+--
+-- Só a versão corrente de cada vaga é carimbada, porque é a única cujo texto
+-- ainda está guardado: `employer_postings` tem a descrição de agora, não a de
+-- cada versão. As linhas de versões anteriores ficam nulas e nunca casam, que
+-- é o comportamento correto para elas.
+--
+-- **Esta migração roda uma vez, antes de qualquer linha nula escrita pelo
+-- código novo, e é isso que a torna segura.** Depois dela, hash nulo passa a
+-- ter um segundo significado -- extração que não obteve resposta -- e carimbar
+-- uma dessas congelaria um conjunto incompleto. Aqui esse caso não existe
+-- ainda: tudo que está nulo neste instante saiu do texto que está guardado ao
+-- lado. Se algum dia for preciso reexecutar isto à mão, exclua antes as
+-- linhas de extrações falhas, ou o carimbo vai dizer que elas são a resposta.
+--
+-- O separador é chr(1) e não chr(0) porque `text` no Postgres recusa o
+-- caractere nulo. `ApplicationScreener.sourceHash` usa o mesmo byte, e os dois
+-- têm de continuar iguais -- é o que faz esta linha e aquele método
+-- responderem a mesma coisa sobre a mesma vaga.
+update posting_requirements r
+   set source_hash = encode(
+           sha256(convert_to(
+               coalesce(p.description_source, '') || chr(1) || coalesce(p.employment_kind, ''),
+               'UTF8')),
+           'hex')
+  from employer_postings p
+ where p.id = r.posting_id
+   and r.content_version = p.content_version
+   and r.source_hash is null;

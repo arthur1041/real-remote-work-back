@@ -263,10 +263,25 @@ public class ApplicationScreener {
                    and s.plan = 'GROWTH'
                    and s.status in ('ACTIVE', 'CANCELLED')
                    and s.expires_at > now()
+                   /* Ainda não lida nesta versão -- ou lida sem resposta.
+                      
+                      `source_hash` nulo quer dizer que a extração desta versão
+                      não obteve resposta do modelo: rede fora, tempo esgotado,
+                      JSON ilegível. O que ficou gravado foi só o requisito de
+                      campo, e a vaga passa a ser lida contra ele e mais nada.
+                      Sem esta segunda condição isso esperaria o employer
+                      editar a vaga para ser tentado de novo, e um minuto de
+                      indisponibilidade viraria uma vaga mal lida por semanas.
+                      Com ela, a passada seguinte tenta outra vez sozinha.
+                      
+                      Não vira laço: uma tentativa que responde grava o hash e
+                      sai da fila, e uma que não responde é a mesma chamada que
+                      a fila já faria uma vez por versão. */
                    and not exists (
                        select 1 from posting_requirements r
                         where r.posting_id = p.id
                           and r.content_version = p.content_version
+                          and r.source_hash is not null
                    )
                  order by p.created_at
                  limit :batch
@@ -478,12 +493,39 @@ public class ApplicationScreener {
 
         List<String[]> found = new ArrayList<>();
 
+        /**
+         * Se o que vai ser gravado é uma resposta ou a falta de uma.
+         *
+         * <p><strong>O que ele impede.</strong> Sem esta distinção, uma falha
+         * passageira virava permanente: o modelo fora do ar deixava `found`
+         * vazio, o requisito de FIELD era gravado assim mesmo -- carimbado com
+         * o hash da descrição -- e toda versão seguinte do mesmo texto copiava
+         * aquele conjunto de um requisito só e nunca mais perguntava. A vaga
+         * passava a ser lida contra "trabalha em tempo integral" e mais nada,
+         * com notas plausíveis e erradas, até alguém editar a descrição.
+         *
+         * <p>Antes da V74 a versão seguinte tentava de novo, então isto é um
+         * buraco que a V74 abriu e que fecha aqui: só carimba o hash quando há
+         * resposta de verdade. Sem carimbo, nada copia, e a próxima versão
+         * pergunta outra vez -- que é o comportamento certo para uma falha de
+         * rede.
+         *
+         * <p>Uma lista legitimamente vazia conta como resposta: o prompt manda
+         * devolver vazio quando a vaga não exige nada, e isso é um fato sobre
+         * a vaga, não uma falha.
+         */
+        boolean answered = true;
+
         String text = role.description() == null ? "" : role.description();
         if (!text.isBlank()) {
             String body = text.length() > MAX_CHARS ? text.substring(0, MAX_CHARS) : text;
             Answer answer = ask(REQUIREMENTS_PROMPT.formatted(
                     role.title() == null ? "" : role.title(), body), null, 900);
-            if (answer != null) {
+            if (answer == null) {
+                log.warn("requirements for posting {} not read: the model did not answer",
+                        role.postingId());
+                answered = false;
+            } else {
                 try {
                     JsonNode list = json.readTree(answer.text()).path("requirements");
                     for (JsonNode item : list) {
@@ -494,13 +536,40 @@ public class ApplicationScreener {
                     }
                 } catch (Exception e) {
                     log.warn("requirements for posting {} unreadable: {}", role.postingId(), e.toString());
+                    answered = false;
                 }
             }
         }
 
+        /* Null quando não houve resposta, e é o null que faz tentar de novo:
+           `rolesDue` só considera lida a versão que tem hash, e
+           `copyRequirements` casa por igualdade, e em SQL nada é igual a
+           null. */
+        String hash = answered ? sourceHash(role) : null;
+
+        /* O que uma tentativa sem resposta deixou para trás.
+           
+           Ela gravou o requisito de campo na posição 0, porque não havia
+           nenhum do modelo antes dele. A retentativa põe os do modelo a partir
+           da posição 0 e o de campo por último, de modo que sem esta limpeza o
+           `on conflict do nothing` guardaria a linha velha na posição 0 e
+           descartaria o primeiro requisito de verdade -- um conjunto
+           embaralhado, que é pior do que o conjunto incompleto que ele
+           substitui. Só linhas sem hash são apagadas: um conjunto bom nunca é
+           tocado por isto. */
+        db.sql("""
+                delete from posting_requirements
+                 where posting_id = :posting
+                   and content_version = :version
+                   and source_hash is null
+                """)
+                .param("posting", role.postingId())
+                .param("version", role.contentVersion())
+                .update();
+
         int position = 0;
         for (String[] item : found) {
-            insertRequirement(role, position++, item[0], Boolean.parseBoolean(item[1]), "MODEL", null);
+            insertRequirement(role, position++, item[0], Boolean.parseBoolean(item[1]), "MODEL", null, hash);
         }
 
         /* The one requirement that needs no model, and that the model must not
@@ -512,7 +581,7 @@ public class ApplicationScreener {
         if (role.employmentKind() != null && !role.employmentKind().isBlank()) {
             insertRequirement(role, position,
                     "Works on a " + humanKind(role.employmentKind()) + " basis",
-                    true, "FIELD", "EMPLOYMENT_KIND");
+                    true, "FIELD", "EMPLOYMENT_KIND", hash);
         }
     }
 
@@ -523,10 +592,18 @@ public class ApplicationScreener {
      * dois contém -- sem ele, mover uma palavra da ponta de um para o começo do
      * outro daria o mesmo hash. Ver {@link #extract} para por que o título não
      * está aqui.
+     *
+     * <p><strong>0x01 e não 0x00.</strong> O separador óbvio seria o byte
+     * nulo, e ele torna este hash impossível de reproduzir em SQL: o tipo
+     * `text` do Postgres recusa o caractere nulo, e `chr(0)` é um erro. Isso
+     * importa porque a V74 precisa carimbar as linhas que já existem com o
+     * hash do texto de que saíram -- sem esse backfill, no primeiro minuto
+     * depois do deploy toda vaga de assinante pareceria nunca ter sido lida e
+     * seria extraída de novo, com as releituras que vêm junto.
      */
     static String sourceHash(Role role) {
         String body = (role.description() == null ? "" : role.description())
-                + '\u0000'
+                + '\u0001'
                 + (role.employmentKind() == null ? "" : role.employmentKind());
         try {
             byte[] sum = MessageDigest.getInstance("SHA-256")
@@ -582,7 +659,7 @@ public class ApplicationScreener {
     }
 
     private void insertRequirement(Role role, int position, String text, boolean essential,
-                                   String source, String fieldCode) {
+                                   String source, String fieldCode, String hash) {
         db.sql("""
                 insert into posting_requirements
                   (posting_id, content_version, position, text, essential, source, field_code,
@@ -597,7 +674,7 @@ public class ApplicationScreener {
                 .param("essential", essential)
                 .param("source", source)
                 .param("field", fieldCode)
-                .param("hash", sourceHash(role))
+                .param("hash", hash)
                 .update();
     }
 
