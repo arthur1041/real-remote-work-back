@@ -66,8 +66,40 @@ public class InviteSender {
      */
     private static final Duration PAUSE_AFTER_FAILURE = Duration.ofMinutes(30);
 
-    /** Set when a send is refused; nothing is attempted until it passes. */
-    private volatile Instant pausedUntil = Instant.EPOCH;
+    /**
+     * Set when a send is refused; nothing is attempted until it passes.
+     *
+     * <p><strong>In the database, not in a field.</strong> It was a
+     * {@code volatile Instant} here, which a restart forgot -- and a restart is
+     * what every deploy does, and what {@code restart: unless-stopped} does
+     * after an OOM. The paragraph above is why that matters more here than
+     * anywhere else: the lead is stamped before the attempt, so every pass
+     * against the wall burns a person who is never written to again, and the
+     * invite cron is two minutes (NEWSLETTER_INVITE_CRON in application.yml).
+     * A refusal window crossed by a restart therefore burned one lead every
+     * two minutes.
+     *
+     * <p>Measured in production on 16 Nov 2026: 747 addresses already INVITED
+     * and none waiting, so the campaign is real and what is exposed is the
+     * next import. V77 put the column on {@code newsletter_settings}, where
+     * the switch, the interval and the mail budget already live.
+     */
+    private Instant pausedUntil() {
+        return db.sql("select invite_paused_until from newsletter_settings where id = 1")
+                .query(Instant.class)
+                .optional()
+                .orElse(Instant.EPOCH);
+    }
+
+    private void pauseFor(Duration how) {
+        db.sql("""
+                        update newsletter_settings
+                           set invite_paused_until = now() + cast(:seconds as int) * interval '1 second'
+                         where id = 1
+                        """)
+                .param("seconds", how.toSeconds())
+                .update();
+    }
 
     private final JdbcClient db;
     private final SubscriberRepository subscribers;
@@ -103,7 +135,7 @@ public class InviteSender {
 
     /** Returns how many invitations were sent. */
     public int sendPending() {
-        if (!mailer.isDeliveryEnabled() || Instant.now().isBefore(pausedUntil)) {
+        if (!mailer.isDeliveryEnabled() || Instant.now().isBefore(pausedUntil())) {
             return 0;
         }
 
@@ -138,7 +170,7 @@ public class InviteSender {
                 // would mean retrying an address that may be the problem, in a
                 // loop -- but it is the only one lost, instead of everything
                 // still queued behind it.
-                pausedUntil = Instant.now().plus(PAUSE_AFTER_FAILURE);
+                pauseFor(PAUSE_AFTER_FAILURE);
                 log.warn("invitations paused for {} after a refused send; {} sent this run",
                         PAUSE_AFTER_FAILURE, sent);
                 break;

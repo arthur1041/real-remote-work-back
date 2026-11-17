@@ -1,0 +1,26 @@
+-- A pausa do envio de convites passa a sobreviver a um reinício.
+--
+-- O `InviteSender` para por trinta minutos quando o relay recusa uma mensagem
+-- de forma síncrona, e o comentário dele explica por que isso importa mais do
+-- que uma pausa normal: a recusa síncrona quase nunca é sobre o endereço -- é
+-- cota diária, chave revogada, indisponibilidade --, e **o lead é marcado antes
+-- da tentativa**, então cada passada contra a parede queima uma pessoa que
+-- nunca mais vai ser escrita. O `awaitingInvite` não devolve quem já tem
+-- `invited_at`.
+--
+-- A pausa vivia num campo `volatile` em memória. Reiniciar o contêiner a
+-- esquecia -- e reiniciar é o que todo deploy faz, e o que o
+-- `restart: unless-stopped` faz depois de um OOM. Com o cron de convite em
+-- dois minutos (`NEWSLETTER_INVITE_CRON` no application.yml), uma janela de
+-- recusa atravessada por um reinício queima um lead a cada dois minutos.
+--
+-- Medido em produção em 16 Nov 2026: 747 endereços já em INVITED e nenhum
+-- aguardando, ou seja, a campanha é real e o que está em risco é a próxima
+-- importação.
+--
+-- Fica em `newsletter_settings`, que é onde o resto do estado de envio já
+-- mora: o interruptor, o intervalo, o orçamento diário e a reserva
+-- transacional. Nulo quer dizer "não pausado", que é o estado de quem nunca
+-- viu uma recusa.
+
+alter table newsletter_settings add column invite_paused_until timestamptz;
