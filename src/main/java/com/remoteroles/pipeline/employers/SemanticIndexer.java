@@ -8,6 +8,7 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Map;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.StringJoiner;
@@ -549,6 +550,79 @@ public class SemanticIndexer {
                 .param("out", answer.tokensOut())
                 .param("id", who.id())
                 .update();
+    }
+
+    /**
+     * O resumo de uma vaga, pedido agora pelo site.
+     *
+     * <p>Mesmo trabalho que a fila faz, sem esperar a vez. Devolve o que
+     * aconteceu para que quem pediu possa decidir: `ready` e o que o site olha
+     * antes de gastar uma geracao, porque so com o resumo escrito existe vetor
+     * para comparar -- e sem vetor a lista sai por palavras, que e a versao do
+     * produto que o Growth nao vende.
+     *
+     * <p>Nao escreve resumo de vaga morta: fora do quadro, o indice nao tem o
+     * que fazer com ela. E nao paga duas vezes pela mesma vaga -- o
+     * `digestPosting` compara o `source_hash` antes de chamar o modelo.
+     */
+    public Map<String, Object> digestPostingNow(long postingId) {
+        Integer version = db.sql("""
+                select p.content_version
+                  from employer_postings p
+                  left join jobs j on j.id = p.job_id
+                 where p.id = :id
+                   and p.status = 'APPROVED'
+                   and (p.job_id is null or j.closed_at is null)
+                """).param("id", postingId).query(Integer.class).optional().orElse(null);
+        if (version == null) {
+            return Map.of("ready", false, "reason", "not a live role");
+        }
+
+        boolean already = Boolean.TRUE.equals(db.sql("""
+                select exists (
+                  select 1 from posting_digests
+                   where posting_id = :id and content_version = :v
+                     and state = 'OK' and embedding is not null)
+                """).param("id", postingId).param("v", version)
+                .query(Boolean.class).optional().orElse(false));
+        if (already) return Map.of("ready", true, "reason", "already written");
+
+        try {
+            /* **A linha antes do resumo, e o vetor depois dele.**
+               
+               `digestPosting` so faz update: quem cria a linha PENDING e a
+               varredura da fila, e quem transforma o resumo em vetor e o
+               `embedDue`, num terceiro passo. Chamar so o do meio, como esta
+               rota fazia quando foi escrita, nao produzia nada -- os updates
+               nao casavam com linha nenhuma e a resposta voltava "no
+               embedding" com o banco vazio. Medido em producao em 17 Nov 2026,
+               no primeiro uso.
+               
+               Os tres passos, aqui, na ordem em que a fila os faz. */
+            db.sql("""
+                    insert into posting_digests
+                           (posting_id, content_version, summary, state, source_hash)
+                    select p.id, p.content_version, '', 'PENDING', %s
+                      from employer_postings p
+                     where p.id = :id
+                    on conflict (posting_id, content_version) do nothing
+                    """.formatted(DIGEST_SOURCE_HASH))
+                    .param("id", postingId).update();
+            digestPosting(postingId, version);
+            embedDue();
+        } catch (Exception e) {
+            log.warn("semantic: on-demand digest for posting {} failed: {}", postingId, e.toString());
+            return Map.of("ready", false, "reason", "failed");
+        }
+
+        boolean ready = Boolean.TRUE.equals(db.sql("""
+                select exists (
+                  select 1 from posting_digests
+                   where posting_id = :id and content_version = :v
+                     and state = 'OK' and embedding is not null)
+                """).param("id", postingId).param("v", version)
+                .query(Boolean.class).optional().orElse(false));
+        return Map.of("ready", ready, "reason", ready ? "written" : "no embedding");
     }
 
     void digestPosting(long postingId, int version) {

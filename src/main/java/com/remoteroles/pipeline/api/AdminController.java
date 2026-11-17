@@ -3,6 +3,7 @@ package com.remoteroles.pipeline.api;
 import com.remoteroles.pipeline.ingest.IngestionService;
 import com.remoteroles.pipeline.normalize.ScopeRechecker;
 import com.remoteroles.pipeline.normalize.ScopeReviewer;
+import com.remoteroles.pipeline.employers.SemanticIndexer;
 import com.remoteroles.pipeline.repo.JobRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +19,7 @@ import com.remoteroles.pipeline.newsletter.MailBudget;
 import com.remoteroles.pipeline.newsletter.PostingDecisionSender;
 import com.remoteroles.pipeline.newsletter.ReviewAlerter;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -62,6 +64,7 @@ public class AdminController {
     // Absent unless scope-review.enabled is on, so the endpoint can say so
     // rather than failing to start the application.
     private final ObjectProvider<ScopeReviewer> scopeReviewer;
+    private final ObjectProvider<SemanticIndexer> semanticIndexer;
     private final MailBudget budget;
     private final IngestionService ingestion;
     private final JobRepository jobs;
@@ -76,6 +79,7 @@ public class AdminController {
                            CvRequestSender cvRequests,
                            ObjectProvider<ConfirmationSender> confirmations,
                            ObjectProvider<ScopeReviewer> scopeReviewer,
+                           ObjectProvider<SemanticIndexer> semanticIndexer,
                            MailBudget budget,
                            IngestionService ingestion, JobRepository jobs,
                            ScopeRechecker rechecker) {
@@ -94,6 +98,7 @@ public class AdminController {
         this.cvRequests = cvRequests;
         this.confirmations = confirmations;
         this.scopeReviewer = scopeReviewer;
+        this.semanticIndexer = semanticIndexer;
     }
 
     @GetMapping("/health")
@@ -140,6 +145,37 @@ public class AdminController {
      * already been judged is skipped by its content hash, so a second call
      * costs nothing rather than paying to ask the same question again.
      */
+    /**
+     * Escreve o resumo semantico de uma vaga agora, em vez de na fila.
+     *
+     * <p><strong>Existe porque a fila chega tarde demais para quem paga.</strong>
+     * O resumo de uma vaga e o que da a ela um vetor, e sem vetor a descoberta
+     * cai no caminho das palavras -- contar quantos termos do titulo aparecem
+     * no perfil, que e exatamente o que o Growth nao esta vendendo. A fila de
+     * fundo faz dez vagas a cada cinco minutos: medido em 17 Nov 2026, com 425
+     * vagas devidas, isso era mais de tres horas. Um empregador que assina,
+     * publica a vaga e pede a lista no mesmo minuto recebia a versao fraca do
+     * produto exatamente enquanto decidia se valeu a assinatura.
+     *
+     * <p>Uma chamada de modelo, alguns segundos, e o caminho vetorial existe
+     * para aquela vaga. O site chama isto pela rede interna antes de gastar
+     * uma geracao -- ver `requestRanking` -- e nunca em resposta a nada que
+     * venha de fora.
+     *
+     * <p>Idempotente pelo `source_hash`: pedir de novo para uma vaga que nao
+     * mudou nao paga outra vez, porque `digestPosting` compara o hash do que
+     * alimenta o resumo antes de chamar o modelo.
+     */
+    @PostMapping("/digest/posting/{id}")
+    public ResponseEntity<Map<String, Object>> digestPosting(@PathVariable long id) {
+        SemanticIndexer indexer = semanticIndexer.getIfAvailable();
+        if (indexer == null) {
+            return ResponseEntity.ok(Map.of("enabled", false,
+                    "detail", "set SEMANTIC_ENABLED=true"));
+        }
+        return ResponseEntity.ok(indexer.digestPostingNow(id));
+    }
+
     @PostMapping("/scope-review/run")
     public Map<String, Object> runScopeReview(
             @RequestParam(name = "ageDays", required = false) Integer ageDays) {

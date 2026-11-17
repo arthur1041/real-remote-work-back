@@ -106,4 +106,46 @@ class DiscoveryRankerTest {
         // A fence that is not closed is left alone rather than half-eaten.
         assertEquals("```json", DiscoveryRanker.stripFence("```json"));
     }
+
+    /* ------------------------------------------- a nota, que agora é do modelo
+
+       Até 17 Nov 2026 a nota saía da aritmética sobre os veredictos, e um
+       essencial não atendido a travava em 4,0. Numa tela cuja função é achar
+       quem o empregador não acharia sozinho, isso punha um sênior de dez anos
+       de experiência adjacente abaixo de um júnior que tivesse a palavra certa
+       escrita no perfil. O número passou a vir do modelo, e o que estes testes
+       guardam é o que acontece quando ele vem errado. */
+
+    @Test
+    @DisplayName("a nota do modelo é lida e arredondada a uma casa")
+    void fitIsRead() throws Exception {
+        assertEquals(7.5, DiscoveryRanker.fitFrom(node("{\"fit\":7.46}")));
+        assertEquals(10.0, DiscoveryRanker.fitFrom(node("{\"fit\":10}")));
+        assertEquals(0.0, DiscoveryRanker.fitFrom(node("{\"fit\":0}")));
+    }
+
+    @Test
+    @DisplayName("número em texto serve, porque o modelo às vezes manda assim")
+    void fitAsText() throws Exception {
+        assertEquals(6.2, DiscoveryRanker.fitFrom(node("{\"fit\":\"6.2\"}")));
+    }
+
+    @Test
+    @DisplayName("fora de 0..10 é resposta malformada, não um extremo")
+    void fitOutOfScale() throws Exception {
+        assertEquals(-1, DiscoveryRanker.fitFrom(node("{\"fit\":85}")));
+        assertEquals(-1, DiscoveryRanker.fitFrom(node("{\"fit\":-2}")));
+    }
+
+    @Test
+    @DisplayName("sem nota, ou com nota que não é número, a entrada não pontua")
+    void fitMissing() throws Exception {
+        assertEquals(-1, DiscoveryRanker.fitFrom(node("{\"summary\":\"boa\"}")));
+        assertEquals(-1, DiscoveryRanker.fitFrom(node("{\"fit\":\"muito bom\"}")));
+        assertEquals(-1, DiscoveryRanker.fitFrom(node("{\"fit\":null}")));
+    }
+
+    private static JsonNode node(String raw) throws Exception {
+        return new ObjectMapper().readTree(raw);
+    }
 }

@@ -54,13 +54,63 @@ public class DiscoveryRanker {
     private static final ObjectMapper json = new ObjectMapper();
     private static final String SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 
+    /**
+     * O que se pergunta ao modelo na descoberta, que não é o que se pergunta
+     * na triagem.
+     *
+     * <p><strong>A diferença entre as duas coisas é a razão desta tela
+     * existir.</strong> A triagem lê quem se candidatou e responde se a pessoa
+     * atende o que o empregador escreveu; ali um requisito essencial não
+     * atendido é motivo para descer, e a nota sai de aritmética sobre os
+     * veredictos — ver `FitScore`, que a triagem continua usando.
+     *
+     * <p>A descoberta é o contrário: a pessoa não se candidatou, e o
+     * empregador está procurando exatamente quem ele não acharia sozinho. Com
+     * a aritmética da triagem, um sênior de dez anos de Go numa vaga de Python
+     * levava `UNMET` no requisito essencial e tinha a nota <strong>travada em
+     * 4,0 por regra</strong>, enquanto um júnior que escreveu "Python" no
+     * perfil levava `MET` e subia acima dele. Isso é o oposto do que a
+     * ferramenta promete, e foi o dono quem apontou, em 17 Nov 2026.
+     *
+     * <p>Então aqui a nota é do modelo, não da conta. Os veredictos continuam
+     * sendo pedidos porque forçam a leitura a se apoiar no que está escrito —
+     * um número sem base é palpite com roupa de medida —, mas quem decide o
+     * lugar na lista é o julgamento sobre o perfil inteiro: senioridade, anos,
+     * profundidade, trajetória, e o quanto do que a pessoa fez atravessa para
+     * o que a vaga pede.
+     */
     private static final String PROMPT = """
-            Decide how well this person answers this role.
+            Decide how well this person fits this role, as somebody who has
+            not applied to it and may not know it exists.
 
-            For every requirement listed, answer MET, UNMET or UNKNOWN, and
-            quote the words of the profile that justify it. UNKNOWN is the
+            First, for every requirement listed, answer MET, UNMET or UNKNOWN
+            and quote the words of the profile that justify it. UNKNOWN is the
             right answer when the profile simply does not say — it is not a
             polite UNMET, and guessing is worse than not knowing.
+
+            Then give the fit as a number from 0 to 10, judging the whole
+            profile and not the count of requirements met. What this means:
+
+            - Seniority, years and the depth of what the person has actually
+              built count. A strong senior whose experience is adjacent can be
+              worth more to this role than a junior who names the exact tool
+              and has a year of it.
+            - Experience transfers. Somebody who has run production systems in
+              one language carries most of that into another; a missing tool is
+              a gap to learn, not a wall, and the summary should say which.
+            - All else equal, direct experience with what the role names wins.
+              Adjacency is not a free pass: it raises somebody who is strong,
+              it does not rescue somebody who is thin.
+            - A requirement the profile does not mention is unknown, not
+              absent. Do not punish silence as though it were a denial.
+
+            The scale, so that two people read on different days are
+            comparable:
+            10-9 would be interviewed today, little to teach.
+            8-7  clearly able to do this role, with something to pick up.
+            6-4  plausible, with a real gap named in the summary.
+            3-1  a stretch, and the summary says why anyone would still look.
+            0    nothing in this profile relates to this role.
 
             Then write one sentence, at most 25 words, that an employer reads
             before opening anything: what this person brings to this role and
@@ -68,6 +118,7 @@ public class DiscoveryRanker {
 
             Answer as JSON only:
             {"verdicts":[{"requirement":1,"verdict":"MET","basis":"..."}],
+             "fit": 7.5,
              "summary":"..."}
 
             ROLE
@@ -279,20 +330,35 @@ public class DiscoveryRanker {
 
         try {
             JsonNode root = json.readTree(stripFence(answer.text()));
-            double points = 0;
-            double possible = 0;
-            boolean essentialMissed = false;
-            for (Requirement r : requirements) {
-                String verdict = verdictFor(root, r.position());
 
-                // Mesma regra do ApplicationScreener, agora literalmente a
-                // mesma: ver `FitScore`.
-                possible += FitScore.weight(r.essential());
-                points += FitScore.credit(verdict, r.essential());
-                if (FitScore.capsTheScore(verdict, r.essential())) essentialMissed = true;
+            /* **A nota e do modelo, e os veredictos sao o que a sustenta.**
+               
+               Eram eles que produziam o numero, pela aritmetica do `FitScore`
+               -- que a triagem continua usando, e com razao. Aqui isso punha
+               um senior de dez anos atras de um junior que tivesse a palavra
+               certa no perfil, porque um essencial UNMET travava a nota em 4,0
+               sem olhar mais nada.
+               
+               Continuam sendo pedidos, e continuam sendo o que impede o numero
+               de ser palpite: resposta que nao tocou em requisito nenhum nao
+               ordena lista. */
+            int grounded = 0;
+            for (Requirement r : requirements) {
+                if (!"UNKNOWN".equals(verdictFor(root, r.position()))) grounded++;
             }
 
-            double score = FitScore.outOfTen(points, possible, essentialMissed);
+            double score = fitFrom(root);
+            if (score < 0) {
+                db.sql("""
+                        update discovery_ranking_entries
+                           set attempts = attempts + 1, failure = 'no fit in the answer'
+                         where id = :id
+                        """).param("id", entry.id()).update();
+                return;
+            }
+            if (grounded == 0 && requirements.size() > 1) {
+                score = Math.min(score, 3.0);
+            }
 
             String summary = root.path("summary").asText("").trim();
             db.sql("""
@@ -353,6 +419,29 @@ public class DiscoveryRanker {
      * of the three, both land on UNKNOWN — which `FitScore` is careful to
      * price at half rather than zero.
      */
+    /**
+     * A nota que o modelo deu, ou -1 quando ele nao deu nenhuma.
+     *
+     * <p>Fora de 0..10 e resposta malformada e nao um extremo: um modelo que
+     * responde 85 esta numa escala que ninguem pediu, e aceitar isso ordenaria
+     * a lista por um engano.
+     */
+    static double fitFrom(JsonNode root) {
+        JsonNode node = root.path("fit");
+        double fit = node.isNumber() ? node.asDouble(-1)
+                : node.isTextual() ? parseFit(node.asText()) : -1;
+        if (fit < 0 || fit > 10) return -1;
+        return Math.round(fit * 10) / 10.0;
+    }
+
+    private static double parseFit(String text) {
+        try {
+            return Double.parseDouble(text.trim());
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
     static String verdictFor(JsonNode root, int position) {
         String verdict = "UNKNOWN";
         for (JsonNode v : root.path("verdicts")) {
