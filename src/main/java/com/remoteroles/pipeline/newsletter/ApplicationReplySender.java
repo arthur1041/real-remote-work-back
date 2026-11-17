@@ -132,10 +132,23 @@ public class ApplicationReplySender {
             }
             /* Stamped before the send, like every other sender here. A crash
                between the two costs one undelivered reply; the other order
-               costs the same person the same letter on every pass. */
-            db.sql("update application_replies set sent_at = now(), attempts = attempts + 1 where id = :id")
+               costs the same person the same letter on every pass.
+
+               And **claimed** rather than stamped -- `and sent_at is null` --
+               which is what makes a second process find nothing to do instead
+               of sending the same letter again. The retry below still works:
+               it clears `sent_at`, so the row is claimable once more on the
+               next pass, and `attempts` is what stops it for good. See
+               `config/SchedulingConfig` for how two processes came to exist. */
+            if (db.sql("""
+                            update application_replies
+                               set sent_at = now(), attempts = attempts + 1
+                             where id = :id and sent_at is null
+                            """)
                     .param("id", row.id())
-                    .update();
+                    .update() == 0) {
+                continue;
+            }
 
             /* And unstamped when the provider refuses it.
              *

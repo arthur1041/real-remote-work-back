@@ -106,9 +106,23 @@ public class PauseNoticeSender {
             // Stamped before sending, as everywhere else here: stamping
             // afterwards mails the same batch every cycle until somebody
             // notices.
-            db.sql("update employer_postings set pause_notified_at = now() where id in (:ids)")
+            /* Claimed rather than stamped, and the count is read: a second
+               process that got there first leaves nothing to claim and this
+               group is skipped. See `config/SchedulingConfig`.
+
+               A *partial* claim — some of the group taken, some not — would
+               still re-announce the taken ones, and that is left as it is: the
+               window it needs was closed at the other end, and re-querying the
+               group here would be a second answer to a question the select
+               above already asked. */
+            if (db.sql("""
+                            update employer_postings set pause_notified_at = now()
+                             where id in (:ids) and pause_notified_at is null
+                            """)
                     .param("ids", group.stream().map(Paused::id).toList())
-                    .update();
+                    .update() == 0) {
+                continue;
+            }
             Paused first = group.get(0);
             mailer.send(first.email(), subject(group), body(group), html(group));
             sent++;

@@ -119,9 +119,18 @@ public class ApplicationSender {
                 log.warn("application notice held: the day's whole mail budget is spent");
                 break;
             }
-            db.sql("update job_applications set notified_at = now() where id = :id")
+            /* Claimed, not just stamped: `and notified_at is null` is what
+               makes a second process find nothing to do instead of sending the
+               same notice again. See `config/SchedulingConfig` for the whole
+               of it. */
+            if (db.sql("""
+                            update job_applications set notified_at = now()
+                             where id = :id and notified_at is null
+                            """)
                     .param("id", row.id())
-                    .update();
+                    .update() == 0) {
+                continue;
+            }
             mailer.send(row.employerEmail(), subject(row), body(row), html(row));
             sent++;
         }

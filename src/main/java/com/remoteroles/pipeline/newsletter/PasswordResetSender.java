@@ -88,13 +88,15 @@ public class PasswordResetSender {
             // the two costs one unsent code, which the reader can ask for
             // again; stamping afterwards would re-send the same code every
             // fifteen seconds until somebody noticed.
-            db.sql("""
+            if (db.sql("""
                             update employer_password_resets
                                set sent_at = now(), code_plain = null
-                             where id = :id
+                             where id = :id and sent_at is null
                             """)
                     .param("id", row.id())
-                    .update();
+                    .update() == 0) {
+                continue;
+            }
             mailer.send(row.email(), SUBJECT, body(row.code()), html(row.code()));
             sent++;
         }

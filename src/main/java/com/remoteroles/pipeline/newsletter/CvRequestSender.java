@@ -118,9 +118,15 @@ public class CvRequestSender {
             // Stamped before the send, like every other sender here: a crash
             // between the two costs one unsent message, where the other order
             // costs an unbounded number of duplicates to the same person.
-            db.sql("update candidate_cv_requests set sent_at = now() where id = :id")
+            // Claimed rather than stamped; see `config/SchedulingConfig`.
+            if (db.sql("""
+                            update candidate_cv_requests set sent_at = now()
+                             where id = :id and sent_at is null
+                            """)
                     .param("id", row.id())
-                    .update();
+                    .update() == 0) {
+                continue;
+            }
             mailer.send(row.email(), SUBJECT, body(row), html(row), oneClickOptOut(row.token()));
             sent++;
         }

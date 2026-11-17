@@ -220,7 +220,17 @@ public class SubscriberRepository {
                 : List.of("CONFIRMED");
     }
 
-    /** Records that a digest went to this address. */
+    /**
+     * Records that a digest went to this address.
+     *
+     * <p>**The one stamp here that is not a claim**, and the reason is that
+     * `last_sent_at` is not a null flag: the digest selects on it being older
+     * than the configured interval, so "and it is still null" would be the
+     * wrong predicate and the right one belongs to the query that chose the
+     * row. The window two processes needed is closed at the other end — see
+     * `config/SchedulingConfig` — and the digest runs weekly, so this is left
+     * stated rather than half-fixed.
+     */
     public void markDigestSent(long id) {
         db.sql("update subscribers set last_sent_at = now() where id = :id")
                 .param("id", id)
@@ -235,9 +245,17 @@ public class SubscriberRepository {
      * on the same crash, re-select the row next minute and keep mailing the same
      * person until someone noticed.
      */
-    public void markConfirmationSent(long id) {
-        db.sql("update subscribers set confirmation_sent_at = now() where id = :id")
+    /**
+     * @return whether this call is the one that claimed it. False means another
+     *     pass, or another process, got there first and nothing should be sent.
+     *     See `config/SchedulingConfig`.
+     */
+    public boolean markConfirmationSent(long id) {
+        return db.sql("""
+                        update subscribers set confirmation_sent_at = now()
+                         where id = :id and confirmation_sent_at is null
+                        """)
                 .param("id", id)
-                .update();
+                .update() > 0;
     }
 }

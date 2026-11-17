@@ -204,9 +204,17 @@ public class PostingDecisionSender {
             // batch every cycle until somebody noticed, and stamping row by row
             // would leave a crash in the middle with half a batch delivered and
             // the other half about to arrive on its own.
-            db.sql("update employer_postings set decision_notified_at = now() where id in (:ids)")
+            // Claimed rather than stamped, count read; see
+            // `config/SchedulingConfig`, and the note in `PauseNoticeSender`
+            // about a partial claim.
+            if (db.sql("""
+                            update employer_postings set decision_notified_at = now()
+                             where id in (:ids) and decision_notified_at is null
+                            """)
                     .param("ids", group.stream().map(Decided::id).toList())
-                    .update();
+                    .update() == 0) {
+                continue;
+            }
             mailer.send(group.get(0).email(), subject(group), body(group), html(group));
             sent++;
             announced += group.size();

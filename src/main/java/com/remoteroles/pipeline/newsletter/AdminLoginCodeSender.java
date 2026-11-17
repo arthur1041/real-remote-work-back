@@ -93,13 +93,15 @@ public class AdminLoginCodeSender {
             // Stamped and wiped before the send, as everywhere else here. After
             // this runs nothing anywhere can read the code: the table keeps only
             // the digest and the only copy left is in the operator's inbox.
-            db.sql("""
+            if (db.sql("""
                             update admin_login_codes
                                set sent_at = now(), code_plain = null
-                             where id = :id
+                             where id = :id and sent_at is null
                             """)
                     .param("id", row.id())
-                    .update();
+                    .update() == 0) {
+                continue;
+            }
             mailer.send(row.email(), SUBJECT, body(row.code()), html(row.code()));
             sent++;
         }

@@ -5,10 +5,12 @@ import com.remoteroles.pipeline.newsletter.NewsletterProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.scheduling.annotation.EnableScheduling;
 
+/**
+ * Scheduling is turned on by {@link com.remoteroles.pipeline.config.SchedulingConfig}
+ * and not here, so that a one-shot process has no timers. See that class.
+ */
 @SpringBootApplication
-@EnableScheduling
 @EnableConfigurationProperties({IngestProperties.class, NewsletterProperties.class})
 public class PipelineApplication {
 

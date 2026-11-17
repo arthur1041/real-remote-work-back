@@ -91,13 +91,15 @@ public class CandidateVerificationSender {
                 log.warn("candidate verification held: the day's whole mail budget is spent");
                 break;
             }
-            db.sql("""
+            if (db.sql("""
                             update candidate_email_verifications
                                set sent_at = now(), code_plain = null
-                             where id = :id
+                             where id = :id and sent_at is null
                             """)
                     .param("id", row.id())
-                    .update();
+                    .update() == 0) {
+                continue;
+            }
             mailer.send(row.email(), SUBJECT, body(row), html(row));
             sent++;
         }

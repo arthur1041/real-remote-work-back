@@ -102,9 +102,15 @@ public class ReviewAlerter {
             }
             // Stamped first, as everywhere else here: one missed alert beats a
             // loop that mails the same submission every minute.
-            db.sql("update employer_postings set review_notified_at = now() where id = :id")
+            // Claimed rather than stamped; see `config/SchedulingConfig`.
+            if (db.sql("""
+                            update employer_postings set review_notified_at = now()
+                             where id = :id and review_notified_at is null
+                            """)
                     .param("id", row.id())
-                    .update();
+                    .update() == 0) {
+                continue;
+            }
             mailer.send(alertTo, subject(row), body(row), html(row));
             sent++;
         }

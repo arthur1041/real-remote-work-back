@@ -80,8 +80,11 @@ public class ConfirmationSender {
                 log.warn("confirmation held: the day's whole mail budget is spent, {} sent this run", sent);
                 break;
             }
-            // Stamped first. See markConfirmationSent.
-            subscribers.markConfirmationSent(row.id());
+            // Claimed first, and nothing is sent if the claim failed. See
+            // markConfirmationSent and `config/SchedulingConfig`.
+            if (!subscribers.markConfirmationSent(row.id())) {
+                continue;
+            }
             mailer.send(row.email(), SUBJECT, body(row), html(row),
                     oneClickUnsubscribe(row.unsubscribeToken()));
             sent++;
