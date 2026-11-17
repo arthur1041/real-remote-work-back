@@ -3,6 +3,7 @@ package com.remoteroles.pipeline.api;
 import com.remoteroles.pipeline.ingest.IngestionService;
 import com.remoteroles.pipeline.normalize.ScopeRechecker;
 import com.remoteroles.pipeline.normalize.ScopeReviewer;
+import com.remoteroles.pipeline.employers.DiscoveryRanker;
 import com.remoteroles.pipeline.employers.SemanticIndexer;
 import com.remoteroles.pipeline.repo.JobRepository;
 import org.springframework.http.ResponseEntity;
@@ -65,6 +66,7 @@ public class AdminController {
     // rather than failing to start the application.
     private final ObjectProvider<ScopeReviewer> scopeReviewer;
     private final ObjectProvider<SemanticIndexer> semanticIndexer;
+    private final ObjectProvider<DiscoveryRanker> discoveryRanker;
     private final MailBudget budget;
     private final IngestionService ingestion;
     private final JobRepository jobs;
@@ -80,6 +82,7 @@ public class AdminController {
                            ObjectProvider<ConfirmationSender> confirmations,
                            ObjectProvider<ScopeReviewer> scopeReviewer,
                            ObjectProvider<SemanticIndexer> semanticIndexer,
+                           ObjectProvider<DiscoveryRanker> discoveryRanker,
                            MailBudget budget,
                            IngestionService ingestion, JobRepository jobs,
                            ScopeRechecker rechecker) {
@@ -99,6 +102,7 @@ public class AdminController {
         this.confirmations = confirmations;
         this.scopeReviewer = scopeReviewer;
         this.semanticIndexer = semanticIndexer;
+        this.discoveryRanker = discoveryRanker;
     }
 
     @GetMapping("/health")
@@ -174,6 +178,25 @@ public class AdminController {
                     "detail", "set SEMANTIC_ENABLED=true"));
         }
         return ResponseEntity.ok(indexer.digestPostingNow(id));
+    }
+
+    /**
+     * Pontua uma lista de descoberta agora.
+     *
+     * <p>O site chama isto logo depois de criar a lista, enquanto a animacao
+     * de progresso roda, para que ela apareca pronta. Sem isto a lista nasce
+     * sem notas e vai se preenchendo na frente de quem acabou de gastar uma
+     * das cinco geracoes do mes. A passada agendada continua existindo para o
+     * que sobra.
+     */
+    @PostMapping("/rank/{id}")
+    public ResponseEntity<Map<String, Object>> rankNow(@PathVariable long id) {
+        DiscoveryRanker ranker = discoveryRanker.getIfAvailable();
+        if (ranker == null) {
+            return ResponseEntity.ok(Map.of("enabled", false,
+                    "detail", "set RANKING_ENABLED=true"));
+        }
+        return ResponseEntity.ok(ranker.rankNow(id));
     }
 
     @PostMapping("/scope-review/run")

@@ -7,7 +7,9 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -193,6 +195,104 @@ public class DiscoveryRanker {
                  long candidateId, String summary) {}
 
     record Requirement(long id, int position, String text, boolean essential) {}
+
+    /**
+     * Pontua uma lista inteira agora, em vez de dez a cada vinte segundos.
+     *
+     * <p><strong>Porque a lista tem que nascer pronta.</strong> A passada
+     * agendada e sequencial e espera cinco segundos entre perfis -- bom para o
+     * trabalho de fundo, que nao tem ninguem olhando. Quando alguem acaba de
+     * gastar uma das cinco geracoes do mes, isso virava catorze perfis
+     * aparecendo sem nota e se preenchendo na frente dele ao longo de mais de
+     * um minuto. Medido em producao em 17 Nov 2026, na primeira lista vetorial
+     * real: catorze entradas, setenta segundos so de pausa entre chamadas.
+     *
+     * <p>Aqui as leituras vao juntas, porque sao threads virtuais e o que elas
+     * fazem e esperar rede. {@code AT_ONCE} e o freio: o limite do modelo e por
+     * minuto, e disparar quarenta de uma vez troca a espera por 429 em todas
+     * elas. Seis cabe, e catorze perfis saem em tres rodadas.
+     *
+     * <p>Nao substitui a passada agendada, que continua existindo para o que
+     * esta rota nao alcanca: perfil que ainda nao tinha resumo quando a lista
+     * foi montada e ganha um depois.
+     */
+    public Map<String, Object> rankNow(long rankingId) {
+        List<Entry> due = dueFor(rankingId);
+        if (due.isEmpty()) {
+            finishRankings();
+            return Map.of("scored", 0, "left", 0);
+        }
+
+        int scored = 0;
+        for (int from = 0; from < due.size(); from += AT_ONCE) {
+            List<Entry> slice = due.subList(from, Math.min(from + AT_ONCE, due.size()));
+            List<Thread> threads = new ArrayList<>();
+            for (Entry entry : slice) {
+                Thread thread = Thread.ofVirtual().unstarted(() -> {
+                    try {
+                        rank(entry);
+                    } catch (RateLimited e) {
+                        /* O 429 ja esperou o backoff dentro de `ask`. Deixar
+                           para a passada agendada e melhor do que insistir
+                           aqui com alguem na frente da tela. */
+                    } catch (Exception e) {
+                        log.warn("ranking: entry {} failed now: {}", entry.id(), e.toString());
+                    }
+                });
+                threads.add(thread);
+                thread.start();
+            }
+            for (Thread thread : threads) {
+                try {
+                    thread.join();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            scored += slice.size();
+        }
+
+        finishRankings();
+        int left = db.sql("""
+                select count(*) from discovery_ranking_entries
+                 where ranking_id = :id and state = 'PENDING'
+                """).param("id", rankingId).query(Integer.class).single();
+        return Map.of("scored", scored, "left", left);
+    }
+
+    /** As entradas devidas de uma lista so, sem o teto da passada agendada. */
+    private List<Entry> dueFor(long rankingId) {
+        return db.sql("""
+                select e.id, e.ranking_id, r.posting_id, r.content_version,
+                       e.candidate_id, coalesce(d.summary, '') as summary
+                  from discovery_ranking_entries e
+                  join discovery_rankings r on r.id = e.ranking_id
+                  left join candidate_digests d on d.candidate_id = e.candidate_id
+                 where e.ranking_id = :id
+                   and e.attempts < :max
+                   and (
+                     e.state = 'PENDING'
+                     or (e.state = 'SKIPPED' and d.state = 'OK' and d.summary <> '')
+                   )
+                 order by e.seed_rank
+                 limit :cap
+                """)
+                .param("id", rankingId)
+                .param("max", maxAttempts)
+                .param("cap", NOW_CAP)
+                .query((rs, n) -> new Entry(
+                        rs.getLong("id"), rs.getLong("ranking_id"), rs.getLong("posting_id"),
+                        rs.getInt("content_version"), rs.getLong("candidate_id"),
+                        rs.getString("summary")))
+                .list();
+    }
+
+    /** Quantas leituras vao juntas. Ver `rankNow`. */
+    private static final int AT_ONCE = 6;
+
+    /** Teto de uma chamada sob demanda, para que ela termine. */
+    private static final int NOW_CAP = 40;
 
     void rankDue() {
         List<Entry> due = db.sql("""
