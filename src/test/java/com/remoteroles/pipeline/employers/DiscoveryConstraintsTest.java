@@ -124,4 +124,43 @@ class DiscoveryConstraintsTest {
         assertEquals(7.0, twelve);
         assertTrue(twelve > five);
     }
+
+    @Test
+    @DisplayName("deductions stop at 2.0 and at half the model's score, so a partial fit never reaches zero")
+    void deductionsAreLimited() {
+        // 18 Nov 2026, the EU test role: a senior with 9 years the model read
+        // at 4.0 went to 0.7 under two timezone PARTIALs and an UNKNOWN.
+        List<Check> stacked = List.of(constraint("PARTIAL", true), constraint("PARTIAL", true),
+                constraint("UNKNOWN", true));
+        assertEquals(2.0, DiscoveryConstraints.adjust(4.0, true, stacked).score());
+        assertEquals(6.0, DiscoveryConstraints.adjust(8.0, true, stacked).score());
+        // A weak read is halved at most, never zeroed by the arithmetic.
+        assertEquals(1.0, DiscoveryConstraints.adjust(2.0, true, stacked).score());
+        // Only the model's own zero, or the location, makes a zero.
+        assertEquals(0.0, DiscoveryConstraints.adjust(0.0, true, stacked).score());
+    }
+
+    @Test
+    @DisplayName("a timezone the description already asks for is not added a second time")
+    void timezoneCovered() {
+        assertTrue(DiscoveryConstraints.coversTimezone(List.of("Go in production",
+                "Able to work at least 4 hours overlapping with CET")));
+        assertTrue(DiscoveryConstraints.coversTimezone(List.of("Works in a Latin American time zone")));
+        // The two the test roles of 18 Nov 2026 actually extracted.
+        assertTrue(DiscoveryConstraints.coversTimezone(List.of("Working Central European hours")));
+        assertTrue(DiscoveryConstraints.coversTimezone(List.of(
+                "Working at least 4 hours overlapping with US Eastern time")));
+        assertEquals(false, DiscoveryConstraints.coversTimezone(List.of("5+ years of support leadership",
+                "Fluent English")));
+    }
+
+    @Test
+    @DisplayName("a level the description already asks for is not added from the title")
+    void seniorityCovered() {
+        assertTrue(DiscoveryConstraints.coversSeniority(List.of("Senior-level experience with React")));
+        assertTrue(DiscoveryConstraints.coversSeniority(List.of("Previous experience as a team lead")));
+        // "lead" as a verb is not a level.
+        assertEquals(false, DiscoveryConstraints.coversSeniority(List.of("Lead customer escalations",
+                "8+ years of full-stack work")));
+    }
 }

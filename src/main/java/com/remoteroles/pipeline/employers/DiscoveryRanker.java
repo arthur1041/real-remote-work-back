@@ -470,12 +470,18 @@ public class DiscoveryRanker {
         /* Os critérios que a vaga declara em campo e não em texto. O nível do
            título e o fuso pedido raramente viram requisito na extração, e são
            exatamente o que o empregador filtraria à mão; entram como
-           requisitos essenciais a mais, julgados como os outros. */
+           requisitos essenciais a mais, julgados como os outros -- só quando
+           nenhum requisito extraído já fala do mesmo assunto, senão o mesmo
+           critério desconta duas vezes. */
         List<Requirement> judged = new ArrayList<>(requirements);
         int next = requirements.stream().mapToInt(Requirement::position).max().orElse(0) + 1;
+        List<String> extracted = requirements.stream().map(Requirement::text).toList();
         String level = DiscoveryConstraints.seniorityRequirement(facts.title());
-        if (level != null) judged.add(new Requirement(-1, next++, level, true));
-        if (facts.timezone() != null && !facts.timezone().isBlank()) {
+        if (level != null && !DiscoveryConstraints.coversSeniority(extracted)) {
+            judged.add(new Requirement(-1, next++, level, true));
+        }
+        if (facts.timezone() != null && !facts.timezone().isBlank()
+                && !DiscoveryConstraints.coversTimezone(extracted)) {
             judged.add(new Requirement(-1, next++, "Works in this timezone or hours: " + facts.timezone(), true));
         }
 

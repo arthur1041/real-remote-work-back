@@ -52,6 +52,19 @@ final class DiscoveryConstraints {
     static final double OPTIONAL_UNMET = 1.0;
     static final double OPTIONAL_PARTIAL = 0.5;
 
+    /*
+     * O teto do que os descontos somam. Até 18 Nov 2026 eles se empilhavam sem
+     * limite, e nas três vagas de teste daquele dia isso zerou gente que o
+     * modelo tinha lido como parcialmente relevante: um sênior espanhol de 9
+     * anos saiu de 4,0 para 0,7 (dois PARTIAL de fuso e um UNKNOWN), um sênior
+     * holandês de 8 anos de 2,0 para 0. O modelo já leu os mesmos requisitos
+     * quando deu a nota, então o desconto é desempate, não segunda sentença:
+     * no máximo 2,0 no total, e nunca mais que metade da nota do modelo. Assim
+     * zero só sai de duas coisas -- o modelo achou que nada tem a ver, ou a
+     * pessoa está fora da localização -- e é isso que a web esconde.
+     */
+    static final double MAX_DEDUCTION = 2.0;
+
     /** Quanto dos anos pedidos ainda é "um pouco abaixo". 12 de 15 é; 10 de 15 não é. */
     static final double YEARS_PARTIAL_RATIO = 0.75;
 
@@ -68,7 +81,7 @@ final class DiscoveryConstraints {
             effects.add("outside the role's location: 0");
             return new Adjusted(0, effects);
         }
-        double score = fit;
+        double deducted = 0;
         double cap = 10;
         for (Check c : checks) {
             if (!c.constraint()) continue;
@@ -81,24 +94,27 @@ final class DiscoveryConstraints {
                         cap = Math.min(cap, ESSENTIAL_UNMET_CAP);
                         effects.add(label + ": capped at " + ESSENTIAL_UNMET_CAP);
                     } else {
-                        score -= OPTIONAL_UNMET;
+                        deducted += OPTIONAL_UNMET;
                         effects.add(label + ": -" + OPTIONAL_UNMET);
                     }
                 }
                 case "PARTIAL" -> {
                     double cost = c.essential() ? ESSENTIAL_PARTIAL : OPTIONAL_PARTIAL;
-                    score -= cost;
+                    deducted += cost;
                     effects.add(label + ": -" + cost);
                 }
                 case "UNKNOWN" -> {
                     if (c.essential()) {
-                        score -= ESSENTIAL_UNKNOWN;
+                        deducted += ESSENTIAL_UNKNOWN;
                         effects.add(label + ": -" + ESSENTIAL_UNKNOWN);
                     }
                 }
                 default -> { }
             }
         }
+        double limit = Math.min(MAX_DEDUCTION, fit / 2);
+        if (deducted > limit) effects.add("deductions limited to " + Math.round(limit * 10) / 10.0);
+        double score = fit - Math.min(deducted, limit);
         score = Math.max(0, Math.min(cap, score));
         return new Adjusted(Math.round(score * 10) / 10.0, effects);
     }
@@ -151,5 +167,33 @@ final class DiscoveryConstraints {
         if (title == null) return null;
         Matcher m = SENIORITY.matcher(title);
         return m.find() ? "Seniority: " + m.group(1).toLowerCase(Locale.ROOT) + " level (from the title)" : null;
+    }
+
+    /*
+     * Um critério que a vaga declara em campo só vira requisito a mais quando
+     * a descrição não o trouxe. No 18 Nov 2026 o fuso estava nas duas pontas
+     * em duas das três vagas de teste (EU #6 e #9, LATAM #5 e #10), e quem
+     * ficava um pouco fora do horário pagava o mesmo PARTIAL duas vezes. Os
+     * textos extraídos ali eram "Working Central European hours" e "Working at
+     * least 4 hours overlapping with US Eastern time" -- "hours" sozinho é o
+     * sinal, porque é assim que as vagas falam de fuso.
+     */
+    private static final Pattern TIMEZONE_WORDS = Pattern.compile(
+            "\\b(time\\s*zones?|timezones?|hours|overlap\\w*|"
+            + "(?:eastern|central|pacific|mountain)\\s+(?:time|european)|"
+            + "utc|gmt|cet|cest|eet|wet|est|edt|cst|pst|pdt|brt|aest)\\b", Pattern.CASE_INSENSITIVE);
+
+    private static final Pattern SENIORITY_WORDS = Pattern.compile(
+            "\\b(seniority|junior|mid[- ]?level|senior|staff|principal|head of|"
+            + "(?:team|tech|technical)\\s+lead)\\b", Pattern.CASE_INSENSITIVE);
+
+    /** Whether any extracted requirement already speaks about timezone or hours. */
+    static boolean coversTimezone(List<String> requirements) {
+        return requirements.stream().anyMatch(t -> t != null && TIMEZONE_WORDS.matcher(t).find());
+    }
+
+    /** Whether any extracted requirement already speaks about the level. */
+    static boolean coversSeniority(List<String> requirements) {
+        return requirements.stream().anyMatch(t -> t != null && SENIORITY_WORDS.matcher(t).find());
     }
 }
