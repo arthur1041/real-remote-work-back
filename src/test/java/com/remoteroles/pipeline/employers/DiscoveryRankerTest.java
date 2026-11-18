@@ -73,11 +73,13 @@ class DiscoveryRankerTest {
     }
 
     @Test
-    @DisplayName("a word that is not one of the three is UNKNOWN")
+    @DisplayName("a word that is not one of the four is UNKNOWN")
     void inventedVerdict() throws Exception {
-        // Models answer "PARTIAL", "LIKELY" and "YES" given half a chance.
+        // Models answer "LIKELY" and "YES" given half a chance. PARTIAL was
+        // in this list until 18 Nov 2026, when "12 years against 15+" became
+        // an answer the ranking asks for -- see DiscoveryConstraints.
         JsonNode root = read("""
-                {"verdicts":[{"requirement":1,"verdict":"PARTIAL","basis":"Some Go"}]}
+                {"verdicts":[{"requirement":1,"verdict":"LIKELY","basis":"Some Go"}]}
                 """);
         assertEquals("UNKNOWN", DiscoveryRanker.verdictFor(root, 1));
     }
@@ -147,5 +149,42 @@ class DiscoveryRankerTest {
 
     private static JsonNode node(String raw) throws Exception {
         return new ObjectMapper().readTree(raw);
+    }
+
+    @Test
+    @DisplayName("PARTIAL is a verdict the discovery accepts")
+    void partialAccepted() throws Exception {
+        JsonNode root = read("""
+                {"verdicts":[{"requirement":2,"kind":"CONSTRAINT","verdict":"partial","basis":"12 years"}]}
+                """);
+        assertEquals("PARTIAL", DiscoveryRanker.verdictFor(root, 2));
+        assertEquals(true, DiscoveryRanker.constraintFor(root, 2));
+    }
+
+    @Test
+    @DisplayName("an unlabelled requirement is a skill, so it costs nothing")
+    void unlabelledIsSkill() throws Exception {
+        JsonNode root = read("""
+                {"verdicts":[{"requirement":1,"verdict":"UNMET","basis":"no Go"},
+                             {"requirement":2,"kind":"whatever","verdict":"UNMET","basis":"x"}]}
+                """);
+        assertEquals(false, DiscoveryRanker.constraintFor(root, 1));
+        assertEquals(false, DiscoveryRanker.constraintFor(root, 2));
+        assertEquals(false, DiscoveryRanker.constraintFor(root, 3));
+    }
+
+    @Test
+    @DisplayName("the requirement number is read whether the model writes 3, \"3\" or \"3. ...\"")
+    void requirementNumberForms() throws Exception {
+        JsonNode root = read("""
+                {"verdicts":[{"requirement":"0","verdict":"MET","basis":"a"},
+                             {"requirement":"7. Seniority: senior","verdict":"UNMET","basis":"b"},
+                             {"requirement":"#2","verdict":"PARTIAL","basis":"c"},
+                             {"requirement":"Go in production","verdict":"MET","basis":"d"}]}
+                """);
+        assertEquals("MET", DiscoveryRanker.verdictFor(root, 0));
+        assertEquals("UNMET", DiscoveryRanker.verdictFor(root, 7));
+        assertEquals("PARTIAL", DiscoveryRanker.verdictFor(root, 2));
+        assertEquals("UNKNOWN", DiscoveryRanker.verdictFor(root, 1));
     }
 }

@@ -47,6 +47,27 @@ import com.remoteroles.pipeline.indexing.GoogleServiceAccount;
  * written there — a number a model invents is not comparable between two
  * profiles, nor between two readings of the same one, and cannot be opened to
  * see where it came from.
+ *
+ * <p><strong>Os critérios básicos são aritmética outra vez, desde 18 Nov
+ * 2026.</strong> Em 17 Nov a nota passou a ser do modelo, para que um sênior
+ * de Go não perdesse para um júnior que escreveu "Python" — e com isso nada
+ * mais segurava o que não é habilidade. O modelo lia só o resumo do CV, nunca
+ * o país, os anos, os idiomas nem o fuso que a pessoa declarou, e a única
+ * lista real tinha um perfil MID do Uzbequistão com 5,0 numa vaga sênior. O
+ * dono pediu o óbvio: quem quer LATAM com 15 anos não pode receber Oriente
+ * Médio com pouca experiência, e um pouco abaixo do pedido desce na lista em
+ * vez de sumir.
+ *
+ * <p>Então são três camadas. <em>Onde a pessoa pode trabalhar</em> é código:
+ * a mesma regra do filtro da web, com as regiões expandidas por
+ * `region_countries`, e quem está fora vai a zero. <em>Anos de
+ * experiência</em> são código quando a pessoa declarou os seus e o requisito
+ * diz um número: ninguém tem dez anos de Go com seis de carreira. O resto
+ * — idioma, fuso, senioridade, diploma, e um "só LATAM" escrito na descrição
+ * de uma vaga marcada como mundial — o modelo lê, agora com os fatos dos dois
+ * lados na frente dele, e diz se é CONSTRAINT ou SKILL. Habilidade continua
+ * julgamento do modelo; critério não atendido desconta por `adjust`, que é
+ * onde os números estão e o que os testes leem.
  */
 @Service
 @ConditionalOnProperty(name = "ranking.enabled", havingValue = "true")
@@ -85,24 +106,52 @@ public class DiscoveryRanker {
             Decide how well this person fits this role, as somebody who has
             not applied to it and may not know it exists.
 
-            First, for every requirement listed, answer MET, UNMET or UNKNOWN
-            and quote the words of the profile that justify it. UNKNOWN is the
-            right answer when the profile simply does not say — it is not a
-            polite UNMET, and guessing is worse than not knowing.
+            The role has two kinds of requirement, and they are judged
+            differently.
 
-            Then give the fit as a number from 0 to 10, judging the whole
-            profile and not the count of requirements met. What this means:
+            CONSTRAINT: a condition the employer will not hire without, that
+            no amount of skill makes up for. Where the person lives or may
+            work, their timezone or working hours, the languages they speak,
+            how many years of experience they have, the seniority level the
+            role is for, a degree, licence or certification, the right to
+            work somewhere, the contract or hours they are available for.
 
-            - Seniority, years and the depth of what the person has actually
-              built count. A strong senior whose experience is adjacent can be
-              worth more to this role than a junior who names the exact tool
-              and has a year of it.
-            - Experience transfers. Somebody who has run production systems in
-              one language carries most of that into another; a missing tool is
-              a gap to learn, not a wall, and the summary should say which.
+            SKILL: what the person knows how to do. Tools, languages of
+            programming, domains, methods.
+
+            Being marked [essential] does not make a skill a constraint:
+            "[essential] experience with Kubernetes" is a SKILL. Years with a
+            named tool or domain are part of that skill ("3+ years with Go"
+            is a SKILL); years of experience overall, in the profession or at
+            a level ("15+ years of experience", "10 years in sales") are a
+            CONSTRAINT.
+
+            First, for every requirement listed, give its kind, and answer
+            MET, PARTIAL, UNMET or UNKNOWN, quoting the words of the profile
+            or the line of CANDIDATE FACTS that justify it.
+            - PARTIAL is close but short: 12 years against "15+", "upper
+              intermediate" against "fluent", two hours outside the window.
+            - UNKNOWN is the right answer when neither the profile nor the
+              facts say. It is not a polite UNMET, and guessing is worse
+              than not knowing.
+            - CANDIDATE FACTS are what the person declared on their account.
+              Use them: "country: EG" answers a requirement to live in Latin
+              America (UNMET), "years: 6" answers "10+ years" (UNMET).
+
+            Then give the fit as a number from 0 to 10.
+
+            - Constraints come first. Somebody who misses an essential one is
+              not a fit however strong they are, and the number must say so.
+              Close-but-short on one is a real cost, not a footnote.
+            - For skills, judge the whole profile, not the count. Seniority,
+              years and the depth of what the person has actually built
+              count. A strong senior whose experience is adjacent can be
+              worth more than a junior who names the exact tool and has a
+              year of it. A missing tool is a gap to learn, not a wall; the
+              summary should say which.
             - All else equal, direct experience with what the role names wins.
-              Adjacency is not a free pass: it raises somebody who is strong,
-              it does not rescue somebody who is thin.
+              Adjacency raises somebody who is strong, it does not rescue
+              somebody who is thin.
             - A requirement the profile does not mention is unknown, not
               absent. Do not punish silence as though it were a denial.
 
@@ -116,17 +165,25 @@ public class DiscoveryRanker {
 
             Then write one sentence, at most 25 words, that an employer reads
             before opening anything: what this person brings to this role and
-            what is missing. No praise, no recommendation, no "great fit".
+            what is missing, naming any constraint they miss. No praise, no
+            recommendation, no "great fit".
 
             Answer as JSON only:
-            {"verdicts":[{"requirement":1,"verdict":"MET","basis":"..."}],
+            {"verdicts":[{"requirement":1,"kind":"CONSTRAINT","verdict":"MET","basis":"..."}],
+            where "requirement" is the number in front of it in the list, as a number.
              "fit": 7.5,
              "summary":"..."}
 
             ROLE
             %s
 
+            ROLE FACTS
+            %s
+
             REQUIREMENTS
+            %s
+
+            CANDIDATE FACTS
             %s
 
             PROFILE
@@ -408,14 +465,29 @@ public class DiscoveryRanker {
             return;
         }
 
+        Facts facts = factsFor(entry.postingId(), entry.candidateId());
+
+        /* Os critérios que a vaga declara em campo e não em texto. O nível do
+           título e o fuso pedido raramente viram requisito na extração, e são
+           exatamente o que o empregador filtraria à mão; entram como
+           requisitos essenciais a mais, julgados como os outros. */
+        List<Requirement> judged = new ArrayList<>(requirements);
+        int next = requirements.stream().mapToInt(Requirement::position).max().orElse(0) + 1;
+        String level = DiscoveryConstraints.seniorityRequirement(facts.title());
+        if (level != null) judged.add(new Requirement(-1, next++, level, true));
+        if (facts.timezone() != null && !facts.timezone().isBlank()) {
+            judged.add(new Requirement(-1, next++, "Works in this timezone or hours: " + facts.timezone(), true));
+        }
+
         StringBuilder list = new StringBuilder();
-        for (Requirement r : requirements) {
+        for (Requirement r : judged) {
             list.append(r.position()).append(". ")
                 .append(r.essential() ? "[essential] " : "")
                 .append(r.text()).append('\n');
         }
 
-        Answer answer = ask(PROMPT.formatted(role, list, entry.summary()));
+        Answer answer = ask(PROMPT.formatted(role, facts.roleFacts(), list,
+                facts.candidateFacts(), entry.summary()));
         db.sql("update discovery_ranking_entries set attempts = attempts + 1 where id = :id")
                 .param("id", entry.id()).update();
         if (answer == null) {
@@ -457,17 +529,71 @@ public class DiscoveryRanker {
                 return;
             }
             if (grounded == 0 && requirements.size() > 1) {
+                /* Said in the log, because it is either a profile with nothing
+                   to say or an answer this could not read, and only the text
+                   tells the two apart. */
+                log.info("ranking: entry {} grounded nothing; answer began {}", entry.id(),
+                        answer.text().length() > 500 ? answer.text().substring(0, 500) : answer.text());
                 score = Math.min(score, 3.0);
             }
 
+            /* Os critérios, por cima do julgamento. Ver `DiscoveryConstraints`. */
+            List<DiscoveryConstraints.Check> checks = new ArrayList<>();
+            ArrayNode recorded = json.createArrayNode();
+            for (Requirement r : judged) {
+                String verdict = verdictFor(root, r.position());
+                boolean constraint = r.id() < 0 || constraintFor(root, r.position());
+                String source = "MODEL";
+                /* Anos contra a carreira declarada. Quando a conta diz que não
+                   dá -- seis anos de carreira não são dez de nada --, isso é
+                   critério básico seja o requisito "10 anos de experiência" ou
+                   "10 anos de Go". Quando a conta não diz nada, o tipo é o que
+                   o modelo leu: anos de uma ferramenta são habilidade, e o
+                   sênior sem Go numa vaga de Go volta a ser julgado inteiro,
+                   que é a regra de 17 Nov 2026. */
+                Integer years = DiscoveryConstraints.requiredYears(r.text());
+                if (years != null) {
+                    String code = DiscoveryConstraints.yearsVerdict(years, facts.years());
+                    if ("PARTIAL".equals(code) || "UNMET".equals(code)) {
+                        String combined = DiscoveryConstraints.combine(code, verdict);
+                        if (!combined.equals(verdict)) source = "YEARS";
+                        verdict = combined;
+                        constraint = true;
+                    }
+                }
+                checks.add(new DiscoveryConstraints.Check(
+                        r.position(), r.text(), r.essential(), constraint, verdict, source));
+                ObjectNode c = recorded.addObject();
+                c.put("requirement", r.position());
+                c.put("text", r.text());
+                c.put("essential", r.essential());
+                c.put("kind", constraint ? "CONSTRAINT" : "SKILL");
+                c.put("verdict", verdict);
+                c.put("source", source);
+            }
+            DiscoveryConstraints.Adjusted adjusted =
+                    DiscoveryConstraints.adjust(score, facts.eligible(), checks);
+            ObjectNode trail = json.createObjectNode();
+            trail.put("modelFit", score);
+            trail.put("eligible", facts.eligible());
+            trail.set("checks", recorded);
+            ArrayNode effects = trail.putArray("effects");
+            adjusted.effects().forEach(effects::add);
+            score = adjusted.score();
+
             String summary = root.path("summary").asText("").trim();
+            if (!facts.eligible()) {
+                summary = "Outside the role's location. " + summary;
+            }
             db.sql("""
                     update discovery_ranking_entries
                        set score = :score, summary = :summary, state = 'OK', failure = null,
                            model = :model, tokens_in = :in, tokens_out = :out,
+                           checks = cast(:checks as jsonb),
                            evaluated_at = now()
                      where id = :id
                     """)
+                    .param("checks", json.writeValueAsString(trail))
                     .param("score", score)
                     .param("summary", summary.isBlank() ? null : summary)
                     .param("model", model)
@@ -484,6 +610,108 @@ public class DiscoveryRanker {
                      where id = :id
                     """).param("max", maxAttempts).param("id", entry.id()).update();
         }
+    }
+
+    /**
+     * What both sides declared in fields, as the model is shown it, and the
+     * location check the code makes itself.
+     *
+     * <p>The eligibility is the web's own rule (`candidateFilter` in
+     * `lib/discovery-fit.ts`) said again here, with regions expanded through
+     * `region_countries`: a list built before that table existed, or by a
+     * filter that one day drifts, still cannot put somebody outside the role's
+     * geography above somebody inside it.
+     */
+    record Facts(String title, String timezone, Integer years, boolean eligible,
+                 String roleFacts, String candidateFacts) {}
+
+    Facts factsFor(long postingId, long candidateId) {
+        return db.sql("""
+                select p.title, p.geo_scope, p.geo_detail,
+                       array_to_string(p.geo_excluded, ', ') as excluded,
+                       p.timezone_requirement, p.employment_kind,
+                       p.salary_min, p.salary_max, p.salary_currency, p.salary_period,
+                       c.country, c.seniority, c.years_experience,
+                       array_to_string(c.languages, ', ') as languages, c.timezone,
+                       array_to_string(c.employment_kinds, ', ') as kinds,
+                       c.salary_expectation, c.salary_currency as want_currency,
+                       c.available_from,
+                       (
+                         (p.geo_scope in ('WORLDWIDE', 'WORLDWIDE_EXCEPT')
+                          or (c.country is not null and exists (
+                                select 1 from regexp_split_to_table(upper(coalesce(p.geo_detail, '')), '[^A-Z_]+') t
+                                 where t <> ''
+                                   and (t = upper(c.country)
+                                        or exists (select 1 from region_countries rc
+                                                    where rc.region = t and rc.country = upper(c.country))))))
+                         and not (c.country is not null and exists (
+                                select 1 from unnest(coalesce(p.geo_excluded, '{}'::text[])) x
+                                 where upper(x) = upper(c.country)
+                                    or exists (select 1 from region_countries rc
+                                                where rc.region = upper(x) and rc.country = upper(c.country))))
+                       ) as eligible
+                  from employer_postings p, candidates c
+                 where p.id = :posting and c.id = :candidate
+                """)
+                .param("posting", postingId)
+                .param("candidate", candidateId)
+                .query((rs, n) -> {
+                    String scope = rs.getString("geo_scope");
+                    String detail = rs.getString("geo_detail");
+                    String excluded = rs.getString("excluded");
+                    String where = "WORLDWIDE".equals(scope) ? "anywhere"
+                            : "WORLDWIDE_EXCEPT".equals(scope) ? "anywhere except " + orNone(excluded)
+                            : "only " + orNone(detail)
+                              + (excluded == null || excluded.isBlank() ? "" : ", except " + excluded);
+                    String salary = rs.getObject("salary_min") == null && rs.getObject("salary_max") == null
+                            ? "not stated"
+                            : "%s %s-%s per %s".formatted(orNone(rs.getString("salary_currency")),
+                                    plain(rs.getObject("salary_min")), plain(rs.getObject("salary_max")),
+                                    orNone(rs.getString("salary_period")).toLowerCase());
+                    String role = """
+                            title: %s
+                            may be done from: %s
+                            timezone or hours: %s
+                            contract: %s
+                            pay: %s
+                            """.formatted(rs.getString("title"), where,
+                            orNone(rs.getString("timezone_requirement")),
+                            orNone(rs.getString("employment_kind")), salary);
+                    Object years = rs.getObject("years_experience");
+                    String candidate = """
+                            country: %s
+                            seniority: %s
+                            years of experience: %s
+                            languages: %s
+                            timezone: %s
+                            contract wanted: %s
+                            pay expected: %s
+                            available from: %s
+                            """.formatted(orNone(rs.getString("country")),
+                            orNone(rs.getString("seniority")),
+                            years == null ? "not stated" : years.toString(),
+                            orNone(rs.getString("languages")), orNone(rs.getString("timezone")),
+                            orNone(rs.getString("kinds")),
+                            rs.getObject("salary_expectation") == null ? "not stated"
+                                    : rs.getObject("salary_expectation") + " "
+                                      + orNone(rs.getString("want_currency")) + " (period not stated)",
+                            rs.getObject("available_from") == null ? "not stated"
+                                    : rs.getObject("available_from").toString());
+                    return new Facts(rs.getString("title"), rs.getString("timezone_requirement"),
+                            years == null ? null : ((Number) years).intValue(),
+                            rs.getBoolean("eligible"), role, candidate);
+                })
+                .optional()
+                .orElse(new Facts("", null, null, true, "not available", "not available"));
+    }
+
+    private static String orNone(String value) {
+        return value == null || value.isBlank() ? "not stated" : value;
+    }
+
+    private static String plain(Object number) {
+        if (number == null) return "?";
+        return new java.math.BigDecimal(number.toString()).stripTrailingZeros().toPlainString();
     }
 
     /** A ranking is done when nothing in it is still waiting. */
@@ -542,10 +770,25 @@ public class DiscoveryRanker {
         }
     }
 
+    /**
+     * The requirement number a verdict is about: 3, "3", "3." or "#3 ...".
+     * Since the answer gained a `kind` beside it, models have started writing
+     * the number as text; a verdict that cannot be tied to a requirement is
+     * one that counts for nothing, so this is lenient about the form and
+     * strict about the number.
+     */
+    static int requirementOf(JsonNode v) {
+        JsonNode n = v.path("requirement");
+        if (n.isInt() || n.isLong()) return n.asInt();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^\\s*#?(\\d{1,3})\\b")
+                .matcher(n.asText(""));
+        return m.find() ? Integer.parseInt(m.group(1)) : -1;
+    }
+
     static String verdictFor(JsonNode root, int position) {
         String verdict = "UNKNOWN";
         for (JsonNode v : root.path("verdicts")) {
-            if (v.path("requirement").asInt(-1) == position) {
+            if (requirementOf(v) == position) {
                 verdict = v.path("verdict").asText("UNKNOWN").toUpperCase();
                 if (!"UNKNOWN".equals(verdict) && v.path("basis").asText("").isBlank()) {
                     verdict = "UNKNOWN";
@@ -553,8 +796,23 @@ public class DiscoveryRanker {
                 break;
             }
         }
-        if (!List.of("MET", "UNMET", "UNKNOWN").contains(verdict)) verdict = "UNKNOWN";
+        if (!List.of("MET", "PARTIAL", "UNMET", "UNKNOWN").contains(verdict)) verdict = "UNKNOWN";
         return verdict;
+    }
+
+    /**
+     * Whether the model called a requirement a constraint. Anything it did not
+     * label, or labelled with a word nobody asked for, is a skill: the
+     * constraint is the half that costs points, and an unlabelled answer is
+     * not evidence enough to charge them.
+     */
+    static boolean constraintFor(JsonNode root, int position) {
+        for (JsonNode v : root.path("verdicts")) {
+            if (requirementOf(v) == position) {
+                return "CONSTRAINT".equalsIgnoreCase(v.path("kind").asText(""));
+            }
+        }
+        return false;
     }
 
     static String stripFence(String text) {
@@ -582,7 +840,7 @@ public class DiscoveryRanker {
             body.set("contents", contents);
             ObjectNode config = json.createObjectNode();
             config.put("temperature", 0);
-            config.put("maxOutputTokens", 900);
+            config.put("maxOutputTokens", 1400);
             config.put("responseMimeType", "application/json");
             body.set("generationConfig", config);
 
