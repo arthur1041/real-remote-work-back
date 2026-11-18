@@ -107,6 +107,7 @@ class DiscoveryConstraintsTest {
         assertEquals("Seniority: senior level (from the title)",
                 DiscoveryConstraints.seniorityRequirement("Senior Backend Engineer (Go, Kubernetes)"));
         assertNull(DiscoveryConstraints.seniorityRequirement("Backend Engineer"));
+        assertNull(DiscoveryConstraints.seniorityRequirement("Lead Generation Specialist"));
     }
 
     @Test

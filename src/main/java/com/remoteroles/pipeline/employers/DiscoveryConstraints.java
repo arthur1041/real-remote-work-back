@@ -144,7 +144,7 @@ final class DiscoveryConstraints {
     }
 
     private static final Pattern SENIORITY = Pattern.compile(
-            "\\b(junior|mid[- ]?level|senior|staff|principal|lead|head of)\\b", Pattern.CASE_INSENSITIVE);
+            "\\b(junior|mid[- ]?level|senior|staff|principal|lead(?!\\s*gen)|head of)\\b", Pattern.CASE_INSENSITIVE);
 
     /** The level a title asks for, as a requirement line, or null. */
     static String seniorityRequirement(String title) {
