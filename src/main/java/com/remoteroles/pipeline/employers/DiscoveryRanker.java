@@ -720,16 +720,33 @@ public class DiscoveryRanker {
         return new java.math.BigDecimal(number.toString()).stripTrailingZeros().toPlainString();
     }
 
-    /** A ranking is done when nothing in it is still waiting. */
+    /** The lowest score the employer's list shows; the web reads the same 1. */
+    static final double SHOWN_FLOOR = 1.0;
+
+    /**
+     * A ranking is done when nothing in it is still waiting.
+     *
+     * <p>And a ranking that is done with nobody at the floor or above is given
+     * back: every entry was read, and the model found nothing on the board
+     * that relates to the role. See V79. Entries that failed have no score and
+     * do not count as "read" -- a list that failed to score is not a list that
+     * found nobody, and it shows in the order of the words.
+     */
     void finishRankings() {
         db.sql("""
                 update discovery_rankings r
-                   set state = 'OK', finished_at = now()
+                   set state = 'OK', finished_at = now(),
+                       refunded_at = case
+                         when exists (select 1 from discovery_ranking_entries e
+                                       where e.ranking_id = r.id and e.score is not null)
+                          and not exists (select 1 from discovery_ranking_entries e
+                                           where e.ranking_id = r.id and e.score >= :floor)
+                         then now() end
                  where r.state = 'PENDING'
                    and not exists (
                      select 1 from discovery_ranking_entries e
                       where e.ranking_id = r.id and e.state = 'PENDING')
-                """).update();
+                """).param("floor", SHOWN_FLOOR).update();
     }
 
     record Answer(String text, int tokensIn, int tokensOut) {}

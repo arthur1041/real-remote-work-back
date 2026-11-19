@@ -1,0 +1,14 @@
+-- A geração que não achou ninguém volta para o saldo (18 Nov 2026).
+--
+-- Desde o web v116 o grupo que o modelo lê tem no mínimo cinco perfis, para
+-- que uma vaga escrita de um jeito incomum não termine numa lista vazia. O
+-- preço disso é que uma vaga que ninguém na base faz -- medido no mesmo dia:
+-- a melhor semelhança de "Medical Oncologist" era 0,614, e mais de 500
+-- perfis passam de 0,50 em quase qualquer vaga -- também ganha cinco nomes, e
+-- o empregador gastaria uma das cinco gerações do mês para ver cinco notas
+-- zero. A cota é contada a partir das próprias gerações (ver V66), então
+-- devolver é marcar a linha: a contagem do saldo pula quem tem refunded_at.
+--
+-- Quem marca é o pipeline, ao fechar a geração: todas as entradas lidas e
+-- nenhuma com nota 1 ou mais (o mesmo piso que a lista usa para esconder).
+alter table discovery_rankings add column refunded_at timestamptz;
