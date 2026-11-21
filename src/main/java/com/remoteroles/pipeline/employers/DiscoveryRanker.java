@@ -77,118 +77,7 @@ public class DiscoveryRanker {
     private static final ObjectMapper json = new ObjectMapper();
     private static final String SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 
-    /**
-     * O que se pergunta ao modelo na descoberta, que não é o que se pergunta
-     * na triagem.
-     *
-     * <p><strong>A diferença entre as duas coisas é a razão desta tela
-     * existir.</strong> A triagem lê quem se candidatou e responde se a pessoa
-     * atende o que o empregador escreveu; ali um requisito essencial não
-     * atendido é motivo para descer, e a nota sai de aritmética sobre os
-     * veredictos — ver `FitScore`, que a triagem continua usando.
-     *
-     * <p>A descoberta é o contrário: a pessoa não se candidatou, e o
-     * empregador está procurando exatamente quem ele não acharia sozinho. Com
-     * a aritmética da triagem, um sênior de dez anos de Go numa vaga de Python
-     * levava `UNMET` no requisito essencial e tinha a nota <strong>travada em
-     * 4,0 por regra</strong>, enquanto um júnior que escreveu "Python" no
-     * perfil levava `MET` e subia acima dele. Isso é o oposto do que a
-     * ferramenta promete, e foi o dono quem apontou, em 17 Nov 2026.
-     *
-     * <p>Então aqui a nota é do modelo, não da conta. Os veredictos continuam
-     * sendo pedidos porque forçam a leitura a se apoiar no que está escrito —
-     * um número sem base é palpite com roupa de medida —, mas quem decide o
-     * lugar na lista é o julgamento sobre o perfil inteiro: senioridade, anos,
-     * profundidade, trajetória, e o quanto do que a pessoa fez atravessa para
-     * o que a vaga pede.
-     */
-    private static final String PROMPT = """
-            Decide how well this person fits this role, as somebody who has
-            not applied to it and may not know it exists.
-
-            The role has two kinds of requirement, and they are judged
-            differently.
-
-            CONSTRAINT: a condition the employer will not hire without, that
-            no amount of skill makes up for. Where the person lives or may
-            work, their timezone or working hours, the languages they speak,
-            how many years of experience they have, the seniority level the
-            role is for, a degree, licence or certification, the right to
-            work somewhere, the contract or hours they are available for.
-
-            SKILL: what the person knows how to do. Tools, languages of
-            programming, domains, methods.
-
-            Being marked [essential] does not make a skill a constraint:
-            "[essential] experience with Kubernetes" is a SKILL. Years with a
-            named tool or domain are part of that skill ("3+ years with Go"
-            is a SKILL); years of experience overall, in the profession or at
-            a level ("15+ years of experience", "10 years in sales") are a
-            CONSTRAINT.
-
-            First, for every requirement listed, give its kind, and answer
-            MET, PARTIAL, UNMET or UNKNOWN, quoting the words of the profile
-            or the line of CANDIDATE FACTS that justify it.
-            - PARTIAL is close but short: 12 years against "15+", "upper
-              intermediate" against "fluent", two hours outside the window.
-            - UNKNOWN is the right answer when neither the profile nor the
-              facts say. It is not a polite UNMET, and guessing is worse
-              than not knowing.
-            - CANDIDATE FACTS are what the person declared on their account.
-              Use them: "country: EG" answers a requirement to live in Latin
-              America (UNMET), "years: 6" answers "10+ years" (UNMET).
-
-            Then give the fit as a number from 0 to 10.
-
-            - Constraints come first. Somebody who misses an essential one is
-              not a fit however strong they are, and the number must say so.
-              Close-but-short on one is a real cost, not a footnote.
-            - For skills, judge the whole profile, not the count. Seniority,
-              years and the depth of what the person has actually built
-              count. A strong senior whose experience is adjacent can be
-              worth more than a junior who names the exact tool and has a
-              year of it. A missing tool is a gap to learn, not a wall; the
-              summary should say which.
-            - All else equal, direct experience with what the role names wins.
-              Adjacency raises somebody who is strong, it does not rescue
-              somebody who is thin.
-            - A requirement the profile does not mention is unknown, not
-              absent. Do not punish silence as though it were a denial.
-
-            The scale, so that two people read on different days are
-            comparable:
-            10-9 would be interviewed today, little to teach.
-            8-7  clearly able to do this role, with something to pick up.
-            6-4  plausible, with a real gap named in the summary.
-            3-1  a stretch, and the summary says why anyone would still look.
-            0    nothing in this profile relates to this role.
-
-            Then write one sentence, at most 25 words, that an employer reads
-            before opening anything: what this person brings to this role and
-            what is missing, naming any constraint they miss. No praise, no
-            recommendation, no "great fit".
-
-            Answer as JSON only:
-            {"verdicts":[{"requirement":1,"kind":"CONSTRAINT","verdict":"MET","basis":"..."}],
-            where "requirement" is the number in front of it in the list, as a number.
-             "fit": 7.5,
-             "summary":"..."}
-
-            ROLE
-            %s
-
-            ROLE FACTS
-            %s
-
-            REQUIREMENTS
-            %s
-
-            CANDIDATE FACTS
-            %s
-
-            PROFILE
-            %s
-            """;
+    /** What is asked of the model lives in `FitJudge`, shared with the screening. */
 
     private final JdbcClient db;
     private final GoogleServiceAccount account;
@@ -250,8 +139,6 @@ public class DiscoveryRanker {
 
     record Entry(long id, long rankingId, long postingId, int contentVersion,
                  long candidateId, String summary) {}
-
-    record Requirement(long id, int position, String text, boolean essential) {}
 
     /**
      * Pontua uma lista inteira agora, em vez de dez a cada vinte segundos.
@@ -430,27 +317,9 @@ public class DiscoveryRanker {
                  where id = :id and state = 'SKIPPED'
                 """).param("id", entry.id()).update();
 
-        List<Requirement> requirements = db.sql("""
-                select id, position, text, essential
-                  from posting_requirements
-                 where posting_id = :posting and content_version = :version
-                 order by position
-                """)
-                .param("posting", entry.postingId())
-                .param("version", entry.contentVersion())
-                .query((rs, n) -> new Requirement(rs.getLong("id"), rs.getInt("position"),
-                        rs.getString("text"), rs.getBoolean("essential")))
-                .list();
-
-        String role = db.sql("""
-                select coalesce(
-                  (select summary from posting_digests
-                    where posting_id = :posting and content_version = :version),
-                  (select title from employer_postings where id = :posting))
-                """)
-                .param("posting", entry.postingId())
-                .param("version", entry.contentVersion())
-                .query(String.class).optional().orElse("");
+        List<FitJudge.Requirement> requirements =
+                FitJudge.requirementsFor(db, entry.postingId(), entry.contentVersion());
+        String role = FitJudge.roleFor(db, entry.postingId(), entry.contentVersion());
 
         /* No requirements extracted for this version of the role: the
            screener owns that step and runs on its own clock. The role summary
@@ -465,35 +334,15 @@ public class DiscoveryRanker {
             return;
         }
 
-        Facts facts = factsFor(entry.postingId(), entry.candidateId());
+        FitJudge.Facts facts = FitJudge.factsFor(db, entry.postingId(), entry.candidateId());
+        List<FitJudge.Requirement> judged = FitJudge.judged(requirements, facts);
 
-        /* Os critérios que a vaga declara em campo e não em texto. O nível do
-           título e o fuso pedido raramente viram requisito na extração, e são
-           exatamente o que o empregador filtraria à mão; entram como
-           requisitos essenciais a mais, julgados como os outros -- só quando
-           nenhum requisito extraído já fala do mesmo assunto, senão o mesmo
-           critério desconta duas vezes. */
-        List<Requirement> judged = new ArrayList<>(requirements);
-        int next = requirements.stream().mapToInt(Requirement::position).max().orElse(0) + 1;
-        List<String> extracted = requirements.stream().map(Requirement::text).toList();
-        String level = DiscoveryConstraints.seniorityRequirement(facts.title());
-        if (level != null && !DiscoveryConstraints.coversSeniority(extracted)) {
-            judged.add(new Requirement(-1, next++, level, true));
-        }
-        if (facts.timezone() != null && !facts.timezone().isBlank()
-                && !DiscoveryConstraints.coversTimezone(extracted)) {
-            judged.add(new Requirement(-1, next++, "Works in this timezone or hours: " + facts.timezone(), true));
-        }
-
-        StringBuilder list = new StringBuilder();
-        for (Requirement r : judged) {
-            list.append(r.position()).append(". ")
-                .append(r.essential() ? "[essential] " : "")
-                .append(r.text()).append('\n');
-        }
-
-        Answer answer = ask(PROMPT.formatted(role, facts.roleFacts(), list,
-                facts.candidateFacts(), entry.summary()));
+        /* Nobody here has applied, so there is no application to show -- and
+           the section says "none" in the same words a reading of an
+           application with nothing written in it says, so that the two
+           questions are the same text. See `FitJudge.PROMPT`. */
+        Answer answer = ask(FitJudge.prompt(role, facts, judged, entry.summary(),
+                FitJudge.NO_APPLICATION));
         db.sql("update discovery_ranking_entries set attempts = attempts + 1 where id = :id")
                 .param("id", entry.id()).update();
         if (answer == null) {
@@ -507,26 +356,9 @@ public class DiscoveryRanker {
         }
 
         try {
-            JsonNode root = json.readTree(stripFence(answer.text()));
-
-            /* **A nota e do modelo, e os veredictos sao o que a sustenta.**
-               
-               Eram eles que produziam o numero, pela aritmetica do `FitScore`
-               -- que a triagem continua usando, e com razao. Aqui isso punha
-               um senior de dez anos atras de um junior que tivesse a palavra
-               certa no perfil, porque um essencial UNMET travava a nota em 4,0
-               sem olhar mais nada.
-               
-               Continuam sendo pedidos, e continuam sendo o que impede o numero
-               de ser palpite: resposta que nao tocou em requisito nenhum nao
-               ordena lista. */
-            int grounded = 0;
-            for (Requirement r : requirements) {
-                if (!"UNKNOWN".equals(verdictFor(root, r.position()))) grounded++;
-            }
-
-            double score = fitFrom(root);
-            if (score < 0) {
+            JsonNode root = json.readTree(FitJudge.stripFence(answer.text()));
+            FitJudge.Judgement judgement = FitJudge.read(root, requirements, judged, facts);
+            if (judgement == null) {
                 db.sql("""
                         update discovery_ranking_entries
                            set attempts = attempts + 1, failure = 'no fit in the answer'
@@ -534,63 +366,14 @@ public class DiscoveryRanker {
                         """).param("id", entry.id()).update();
                 return;
             }
-            if (grounded == 0 && requirements.size() > 1) {
+            if (judgement.ungrounded()) {
                 /* Said in the log, because it is either a profile with nothing
                    to say or an answer this could not read, and only the text
                    tells the two apart. */
                 log.info("ranking: entry {} grounded nothing; answer began {}", entry.id(),
                         answer.text().length() > 500 ? answer.text().substring(0, 500) : answer.text());
-                score = Math.min(score, 3.0);
             }
-
-            /* Os critérios, por cima do julgamento. Ver `DiscoveryConstraints`. */
-            List<DiscoveryConstraints.Check> checks = new ArrayList<>();
-            ArrayNode recorded = json.createArrayNode();
-            for (Requirement r : judged) {
-                String verdict = verdictFor(root, r.position());
-                boolean constraint = r.id() < 0 || constraintFor(root, r.position());
-                String source = "MODEL";
-                /* Anos contra a carreira declarada. Quando a conta diz que não
-                   dá -- seis anos de carreira não são dez de nada --, isso é
-                   critério básico seja o requisito "10 anos de experiência" ou
-                   "10 anos de Go". Quando a conta não diz nada, o tipo é o que
-                   o modelo leu: anos de uma ferramenta são habilidade, e o
-                   sênior sem Go numa vaga de Go volta a ser julgado inteiro,
-                   que é a regra de 17 Nov 2026. */
-                Integer years = DiscoveryConstraints.requiredYears(r.text());
-                if (years != null) {
-                    String code = DiscoveryConstraints.yearsVerdict(years, facts.years());
-                    if ("PARTIAL".equals(code) || "UNMET".equals(code)) {
-                        String combined = DiscoveryConstraints.combine(code, verdict);
-                        if (!combined.equals(verdict)) source = "YEARS";
-                        verdict = combined;
-                        constraint = true;
-                    }
-                }
-                checks.add(new DiscoveryConstraints.Check(
-                        r.position(), r.text(), r.essential(), constraint, verdict, source));
-                ObjectNode c = recorded.addObject();
-                c.put("requirement", r.position());
-                c.put("text", r.text());
-                c.put("essential", r.essential());
-                c.put("kind", constraint ? "CONSTRAINT" : "SKILL");
-                c.put("verdict", verdict);
-                c.put("source", source);
-            }
-            DiscoveryConstraints.Adjusted adjusted =
-                    DiscoveryConstraints.adjust(score, facts.eligible(), checks);
-            ObjectNode trail = json.createObjectNode();
-            trail.put("modelFit", score);
-            trail.put("eligible", facts.eligible());
-            trail.set("checks", recorded);
-            ArrayNode effects = trail.putArray("effects");
-            adjusted.effects().forEach(effects::add);
-            score = adjusted.score();
-
-            String summary = root.path("summary").asText("").trim();
-            if (!facts.eligible()) {
-                summary = "Outside the role's location. " + summary;
-            }
+            String summary = judgement.summary();
             db.sql("""
                     update discovery_ranking_entries
                        set score = :score, summary = :summary, state = 'OK', failure = null,
@@ -599,8 +382,8 @@ public class DiscoveryRanker {
                            evaluated_at = now()
                      where id = :id
                     """)
-                    .param("checks", json.writeValueAsString(trail))
-                    .param("score", score)
+                    .param("checks", judgement.trail())
+                    .param("score", judgement.score())
                     .param("summary", summary.isBlank() ? null : summary)
                     .param("model", model)
                     .param("in", answer.tokensIn())
@@ -618,107 +401,6 @@ public class DiscoveryRanker {
         }
     }
 
-    /**
-     * What both sides declared in fields, as the model is shown it, and the
-     * location check the code makes itself.
-     *
-     * <p>The eligibility is the web's own rule (`candidateFilter` in
-     * `lib/discovery-fit.ts`) said again here, with regions expanded through
-     * `region_countries`: a list built before that table existed, or by a
-     * filter that one day drifts, still cannot put somebody outside the role's
-     * geography above somebody inside it.
-     */
-    record Facts(String title, String timezone, Integer years, boolean eligible,
-                 String roleFacts, String candidateFacts) {}
-
-    Facts factsFor(long postingId, long candidateId) {
-        return db.sql("""
-                select p.title, p.geo_scope, p.geo_detail,
-                       array_to_string(p.geo_excluded, ', ') as excluded,
-                       p.timezone_requirement, p.employment_kind,
-                       p.salary_min, p.salary_max, p.salary_currency, p.salary_period,
-                       c.country, c.seniority, c.years_experience,
-                       array_to_string(c.languages, ', ') as languages, c.timezone,
-                       array_to_string(c.employment_kinds, ', ') as kinds,
-                       c.salary_expectation, c.salary_currency as want_currency,
-                       c.available_from,
-                       (
-                         (p.geo_scope in ('WORLDWIDE', 'WORLDWIDE_EXCEPT')
-                          or (c.country is not null and exists (
-                                select 1 from regexp_split_to_table(upper(coalesce(p.geo_detail, '')), '[^A-Z_]+') t
-                                 where t <> ''
-                                   and (t = upper(c.country)
-                                        or exists (select 1 from region_countries rc
-                                                    where rc.region = t and rc.country = upper(c.country))))))
-                         and not (c.country is not null and exists (
-                                select 1 from unnest(coalesce(p.geo_excluded, '{}'::text[])) x
-                                 where upper(x) = upper(c.country)
-                                    or exists (select 1 from region_countries rc
-                                                where rc.region = upper(x) and rc.country = upper(c.country))))
-                       ) as eligible
-                  from employer_postings p, candidates c
-                 where p.id = :posting and c.id = :candidate
-                """)
-                .param("posting", postingId)
-                .param("candidate", candidateId)
-                .query((rs, n) -> {
-                    String scope = rs.getString("geo_scope");
-                    String detail = rs.getString("geo_detail");
-                    String excluded = rs.getString("excluded");
-                    String where = "WORLDWIDE".equals(scope) ? "anywhere"
-                            : "WORLDWIDE_EXCEPT".equals(scope) ? "anywhere except " + orNone(excluded)
-                            : "only " + orNone(detail)
-                              + (excluded == null || excluded.isBlank() ? "" : ", except " + excluded);
-                    String salary = rs.getObject("salary_min") == null && rs.getObject("salary_max") == null
-                            ? "not stated"
-                            : "%s %s-%s per %s".formatted(orNone(rs.getString("salary_currency")),
-                                    plain(rs.getObject("salary_min")), plain(rs.getObject("salary_max")),
-                                    orNone(rs.getString("salary_period")).toLowerCase());
-                    String role = """
-                            title: %s
-                            may be done from: %s
-                            timezone or hours: %s
-                            contract: %s
-                            pay: %s
-                            """.formatted(rs.getString("title"), where,
-                            orNone(rs.getString("timezone_requirement")),
-                            orNone(rs.getString("employment_kind")), salary);
-                    Object years = rs.getObject("years_experience");
-                    String candidate = """
-                            country: %s
-                            seniority: %s
-                            years of experience: %s
-                            languages: %s
-                            timezone: %s
-                            contract wanted: %s
-                            pay expected: %s
-                            available from: %s
-                            """.formatted(orNone(rs.getString("country")),
-                            orNone(rs.getString("seniority")),
-                            years == null ? "not stated" : years.toString(),
-                            orNone(rs.getString("languages")), orNone(rs.getString("timezone")),
-                            orNone(rs.getString("kinds")),
-                            rs.getObject("salary_expectation") == null ? "not stated"
-                                    : rs.getObject("salary_expectation") + " "
-                                      + orNone(rs.getString("want_currency")) + " (period not stated)",
-                            rs.getObject("available_from") == null ? "not stated"
-                                    : rs.getObject("available_from").toString());
-                    return new Facts(rs.getString("title"), rs.getString("timezone_requirement"),
-                            years == null ? null : ((Number) years).intValue(),
-                            rs.getBoolean("eligible"), role, candidate);
-                })
-                .optional()
-                .orElse(new Facts("", null, null, true, "not available", "not available"));
-    }
-
-    private static String orNone(String value) {
-        return value == null || value.isBlank() ? "not stated" : value;
-    }
-
-    private static String plain(Object number) {
-        if (number == null) return "?";
-        return new java.math.BigDecimal(number.toString()).stripTrailingZeros().toPlainString();
-    }
 
     /** The lowest score the employer's list shows; the web reads the same 1. */
     static final double SHOWN_FLOOR = 1.0;
@@ -753,100 +435,6 @@ public class DiscoveryRanker {
 
     static class RateLimited extends RuntimeException {}
 
-    /** Models wrap JSON in a fence often enough that trimming it is not a hack. */
-    /**
-     * What the model said about one requirement, cleaned before it counts.
-     *
-     * <p>Separated from the scoring loop so it can be read on its own and
-     * tested without a database or a model: everything it refuses is a way a
-     * wrong answer could become a number.
-     *
-     * <p><strong>No quote, no claim.</strong> A verdict with nothing behind it
-     * is a guess wearing the clothes of a finding, and the one that arrives
-     * with no `basis` is almost always the one the model inferred. Same rule
-     * the screening keeps.
-     *
-     * <p>A requirement the answer never mentions, or a verdict that is not one
-     * of the three, both land on UNKNOWN — which `FitScore` is careful to
-     * price at half rather than zero.
-     */
-    /**
-     * A nota que o modelo deu, ou -1 quando ele nao deu nenhuma.
-     *
-     * <p>Fora de 0..10 e resposta malformada e nao um extremo: um modelo que
-     * responde 85 esta numa escala que ninguem pediu, e aceitar isso ordenaria
-     * a lista por um engano.
-     */
-    static double fitFrom(JsonNode root) {
-        JsonNode node = root.path("fit");
-        double fit = node.isNumber() ? node.asDouble(-1)
-                : node.isTextual() ? parseFit(node.asText()) : -1;
-        if (fit < 0 || fit > 10) return -1;
-        return Math.round(fit * 10) / 10.0;
-    }
-
-    private static double parseFit(String text) {
-        try {
-            return Double.parseDouble(text.trim());
-        } catch (NumberFormatException e) {
-            return -1;
-        }
-    }
-
-    /**
-     * The requirement number a verdict is about: 3, "3", "3." or "#3 ...".
-     * Since the answer gained a `kind` beside it, models have started writing
-     * the number as text; a verdict that cannot be tied to a requirement is
-     * one that counts for nothing, so this is lenient about the form and
-     * strict about the number.
-     */
-    static int requirementOf(JsonNode v) {
-        JsonNode n = v.path("requirement");
-        if (n.isInt() || n.isLong()) return n.asInt();
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^\\s*#?(\\d{1,3})\\b")
-                .matcher(n.asText(""));
-        return m.find() ? Integer.parseInt(m.group(1)) : -1;
-    }
-
-    static String verdictFor(JsonNode root, int position) {
-        String verdict = "UNKNOWN";
-        for (JsonNode v : root.path("verdicts")) {
-            if (requirementOf(v) == position) {
-                verdict = v.path("verdict").asText("UNKNOWN").toUpperCase();
-                if (!"UNKNOWN".equals(verdict) && v.path("basis").asText("").isBlank()) {
-                    verdict = "UNKNOWN";
-                }
-                break;
-            }
-        }
-        if (!List.of("MET", "PARTIAL", "UNMET", "UNKNOWN").contains(verdict)) verdict = "UNKNOWN";
-        return verdict;
-    }
-
-    /**
-     * Whether the model called a requirement a constraint. Anything it did not
-     * label, or labelled with a word nobody asked for, is a skill: the
-     * constraint is the half that costs points, and an unlabelled answer is
-     * not evidence enough to charge them.
-     */
-    static boolean constraintFor(JsonNode root, int position) {
-        for (JsonNode v : root.path("verdicts")) {
-            if (requirementOf(v) == position) {
-                return "CONSTRAINT".equalsIgnoreCase(v.path("kind").asText(""));
-            }
-        }
-        return false;
-    }
-
-    static String stripFence(String text) {
-        String out = text.trim();
-        if (out.startsWith("```")) {
-            int first = out.indexOf('\n');
-            int last = out.lastIndexOf("```");
-            if (first > 0 && last > first) out = out.substring(first + 1, last);
-        }
-        return out.trim();
-    }
 
     Answer ask(String prompt) {
         try {

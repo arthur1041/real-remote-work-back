@@ -482,8 +482,17 @@ public class SemanticIndexer {
         }
     }
 
-    void digestCandidate(Pending who) {
-
+    /**
+     * The question that turns somebody's profile and CV into the summary the
+     * index reads -- and the discovery ranker scores.
+     *
+     * <p>Package-visible since 20 Nov 2026 because the screening asks it too:
+     * an application whose CV is not the one this index summarised still has
+     * to be judged from a summary written by these same words, or its score
+     * would come from different material than the one it is compared with.
+     * See {@code ApplicationScreener.materialFor}.
+     */
+    static String candidateDigestPrompt(JdbcClient db, long candidateId) {
         String profile = db.sql("""
                 select concat_ws(E'\\n',
                     'Headline: '   || coalesce(headline, '(none)'),
@@ -495,12 +504,21 @@ public class SemanticIndexer {
                     'Country: '    || coalesce(country, '(not stated)'),
                     'Open to: '    || coalesce(array_to_string(employment_kinds, ', '), '(not stated)'))
                   from candidates where id = :id
-                """).param("id", who.id()).query(String.class).optional().orElse("");
+                """).param("id", candidateId).query(String.class).optional().orElse("");
+        return CANDIDATE_PROMPT.formatted(cut(profile));
+    }
+
+    /** The one answer the summary prompt allows for "there is nothing here". */
+    static boolean saysNothing(String text) {
+        return text == null || text.isBlank() || text.strip().equalsIgnoreCase("NOTHING");
+    }
+
+    void digestCandidate(Pending who) {
 
         byte[] cv = who.resumeId() == null ? null : fetchCv(who.resumeId());
         // Counted only once the call has actually been made: a pass that
         // stops on a rate limit must leave the queue exactly as it found it.
-        Answer answer = ask(CANDIDATE_PROMPT.formatted(cut(profile)), cv);
+        Answer answer = ask(candidateDigestPrompt(db, who.id()), cv);
         db.sql("update candidate_digests set attempts = attempts + 1 where candidate_id = :id")
                 .param("id", who.id()).update();
         if (answer == null || answer.text().isBlank()) {

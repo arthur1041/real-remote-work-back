@@ -1,0 +1,16 @@
+-- The screening's score comes from the discovery's judge (FitJudge).
+--
+-- Until 20 Nov 2026 an application's score was arithmetic over its verdicts
+-- (FitScore: essential x2, unknown half, a contradicted essential cut at
+-- 4.0), while the discovery had used the model's judgement since 17 Nov. The
+-- end-to-end test of 20 Nov read the same developer, same CV, same role, at
+-- 4.0 as an applicant and 1.5 in the discovery panel. The owner's rule: the
+-- same material gives the same score.
+--
+-- fit_checks is the judge's trail for that score -- the model's fit, each
+-- requirement as a constraint or a skill, what each constraint cost, and
+-- which material the person was read from -- the same shape
+-- discovery_ranking_entries.checks already keeps. Null on a finished reading
+-- means it was scored by the old rule: ApplicationScreener.rejudgeDue finds
+-- those and replaces the number, leaving the verdicts and the sentence alone.
+alter table application_screenings add column fit_checks jsonb;

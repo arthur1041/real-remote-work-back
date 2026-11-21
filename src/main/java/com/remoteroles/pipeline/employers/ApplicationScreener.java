@@ -16,6 +16,8 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -66,6 +68,10 @@ import com.remoteroles.pipeline.indexing.GoogleServiceAccount;
  * monthly ceiling, which the plan card states out loud; every input is
  * truncated; and a global daily cap sits above all of it. Every reading stores
  * the tokens it used, so the month's cost is a query rather than an estimate.
+ * Since 20 Nov 2026 a reading is two calls, sometimes three: the verdicts, the
+ * score from {@link FitJudge} (a short prompt over a summary, not the PDF),
+ * and -- only when the index holds no summary of this very CV -- the summary
+ * itself. All of it lands in the same two token columns.
  */
 @Service
 @ConditionalOnProperty(name = "screening.enabled", havingValue = "true")
@@ -221,6 +227,7 @@ public class ApplicationScreener {
         try {
             extractDue();
             screenDue();
+            rejudgeDue();
         } catch (Exception e) {
             // A pass that throws must not kill the schedule: the next minute is
             // a free retry, and the alternative is a reader that stops silently.
@@ -416,9 +423,10 @@ public class ApplicationScreener {
         int copied = db.sql("""
                 insert into application_screenings
                       (application_id, content_version, state, score, summary, model,
-                       attempts, tokens_in, tokens_out, requested_at, evaluated_at, carried_from)
+                       attempts, tokens_in, tokens_out, requested_at, evaluated_at, carried_from,
+                       fit_checks)
                 select g.application_id, :version, 'OK', g.score, g.summary, g.model,
-                       0, 0, 0, now(), now(), g.id
+                       0, 0, 0, now(), now(), g.id, g.fit_checks
                   from application_screenings g
                   join job_applications a on a.id = g.application_id
                  where a.posting_id = :posting
@@ -791,6 +799,296 @@ public class ApplicationScreener {
                      Long resumeId, String profile, String answers, String kinds,
                      String answerKind) {}
 
+    /* ------------------------------------------------------------ the score */
+
+    /**
+     * The score of one application, from the judge the discovery uses.
+     *
+     * <p><strong>Since 20 Nov 2026 the number is not arithmetic over this
+     * reader's verdicts.</strong> It was, through `FitScore`, while the
+     * discovery had moved to the model's judgement on 17 Nov; the end-to-end
+     * test of 20 Nov found the same developer, with the same CV, at 4.0 on
+     * his application and 1.5 in the discovery panel of the same role. The
+     * owner's rule: the same material gives the same score. The verdicts this
+     * reader asks for stay exactly as they were -- quoted, per requirement,
+     * and what the inbox shows and the funnel groups by. Only the number
+     * moved, to {@link FitJudge}.
+     *
+     * <p>Null when the model gave nothing usable; the caller decides what
+     * that means for its row.
+     */
+    record Scored(double score, String trail, int tokensIn, int tokensOut) {}
+
+    Scored judge(long applicationId, Supplier<byte[]> cv) throws Exception {
+        record Inputs(long candidateId, long postingId, int contentVersion, String coverNote,
+                      String answers, String custom, String account) {}
+        Inputs in = db.sql("""
+                select a.candidate_id, a.posting_id, p.content_version,
+                       coalesce(a.cover_note, '') as cover_note,
+                       coalesce(a.answers, '{}'::jsonb)::text as answers,
+                       coalesce(a.custom_answers, '[]'::jsonb)::text as custom,
+                       -- What the account already says, in the shape the form
+                       -- prefills it in, so an answer left as it came is
+                       -- recognised as the account speaking and not the
+                       -- application. See `applicationText`.
+                       jsonb_build_object(
+                           'COUNTRY', c.country,
+                           'TIMEZONE', c.timezone,
+                           'SENIORITY', c.seniority,
+                           'YEARS_EXPERIENCE', c.years_experience::text,
+                           'SKILLS', array_to_string(c.skills, ', '),
+                           'LANGUAGES', array_to_string(c.languages, ', '),
+                           'EMPLOYMENT_KIND', array_to_string(c.employment_kinds, ','),
+                           'SALARY_EXPECTATION', concat_ws(' ', c.salary_currency, c.salary_expectation::text),
+                           'AVAILABLE_FROM', c.available_from::text
+                       )::text as account
+                  from job_applications a
+                  join employer_postings p on p.id = a.posting_id
+                  join candidates c on c.id = a.candidate_id
+                 where a.id = :id
+                """)
+                .param("id", applicationId)
+                .query((rs, n) -> new Inputs(rs.getLong("candidate_id"), rs.getLong("posting_id"),
+                        rs.getInt("content_version"), rs.getString("cover_note"),
+                        rs.getString("answers"), rs.getString("custom"), rs.getString("account")))
+                .optional().orElse(null);
+        if (in == null) return null;
+
+        List<FitJudge.Requirement> requirements =
+                FitJudge.requirementsFor(db, in.postingId(), in.contentVersion());
+        if (requirements.isEmpty()) return null;
+        String role = FitJudge.roleFor(db, in.postingId(), in.contentVersion());
+        FitJudge.Facts facts = FitJudge.factsFor(db, in.postingId(), in.candidateId());
+        List<FitJudge.Requirement> judged = FitJudge.judged(requirements, facts);
+
+        Material material = materialFor(applicationId, in.candidateId(), cv);
+        if (material == null) return null;
+        String application = applicationText(in.coverNote(), json.readTree(in.answers()),
+                json.readTree(in.custom()), json.readTree(in.account()));
+
+        Answer answer = ask(FitJudge.prompt(role, facts, judged, material.text(), application),
+                null, 1400, true);
+        if (answer == null) return null;
+        FitJudge.Judgement judgement = FitJudge.read(
+                json.readTree(FitJudge.stripFence(answer.text())), requirements, judged, facts);
+        if (judgement == null) return null;
+
+        /* Which material the number came from, kept with the trail: when an
+           application and a discovery entry disagree, this is the first thing
+           anybody asks, and it is not recoverable afterwards. */
+        ObjectNode trail = (ObjectNode) json.readTree(judgement.trail());
+        trail.put("material", material.kind());
+        trail.put("application", !application.isBlank());
+        return new Scored(judgement.score(), json.writeValueAsString(trail),
+                answer.tokensIn() + material.tokensIn(), answer.tokensOut() + material.tokensOut());
+    }
+
+    /** What the judge reads as the person, and where it came from. */
+    record Material(String text, String kind, int tokensIn, int tokensOut) {}
+
+    /**
+     * The person as the judge reads them: the index's own summary when it
+     * describes this very CV, a summary written now by the same words when it
+     * does not.
+     *
+     * <p><strong>The reuse is the whole point.</strong> The discovery judges
+     * {@code candidate_digests.summary}; an application sent with the same CV
+     * must be judged from the same text, or "same material, same score" is
+     * only true by luck. Same means the same file (by its hash, since an
+     * application may carry a copy) and a summary that is current for the
+     * profile (its fingerprint is the one the index would write today).
+     *
+     * <p>Anything else -- a different CV attached to this application, a
+     * summary not yet written, somebody not in the index at all -- gets a
+     * summary now, from {@link SemanticIndexer#candidateDigestPrompt}, the
+     * same question the index asks. It is not stored as the person's digest:
+     * it describes a CV that may not be their profile's.
+     */
+    Material materialFor(long applicationId, long candidateId, Supplier<byte[]> cv) {
+        String indexed = db.sql("""
+                select d.summary
+                  from job_applications a
+                  join candidate_digests d on d.candidate_id = a.candidate_id
+                  left join candidate_resumes ar on ar.id = a.resume_id
+                  left join candidate_resumes dr on dr.id = d.resume_id
+                 where a.id = :id
+                   and d.state = 'OK' and d.summary <> ''
+                   and ar.sha256 is not distinct from dr.sha256
+                   and exists (select 1 from candidate_digest_source s
+                                where s.candidate_id = d.candidate_id
+                                  and s.fingerprint = d.fingerprint)
+                """)
+                .param("id", applicationId)
+                .query(String.class).optional().orElse(null);
+        if (indexed != null) return new Material(indexed, "INDEX_SUMMARY", 0, 0);
+
+        Answer written = ask(SemanticIndexer.candidateDigestPrompt(db, candidateId), cv.get(), 700, false);
+        if (written == null && cv.get() != null) {
+            // The same fallback the verdicts have: a PDF the model refuses
+            // must not cost the whole reading.
+            written = ask(SemanticIndexer.candidateDigestPrompt(db, candidateId), null, 700, false);
+        }
+        if (written == null) return null;
+        if (SemanticIndexer.saysNothing(written.text())) {
+            return new Material("No CV provided, and the profile says nothing to summarise.",
+                    "NOTHING", written.tokensIn(), written.tokensOut());
+        }
+        return new Material(written.text().strip(), "WRITTEN_NOW", written.tokensIn(), written.tokensOut());
+    }
+
+    /** Fields the judge is never shown: who the person is, and links it cannot open. */
+    static final Set<String> NOT_MATERIAL =
+            Set.of("FULL_NAME", "EMAIL", "LINKEDIN", "PORTFOLIO", "COVER_NOTE");
+
+    /**
+     * What this application says that the account does not.
+     *
+     * <p><strong>Only what is new.</strong> The form prefills country,
+     * seniority, years, skills, pay and the rest from the account, and most
+     * people send them as they came. Shown to the judge anyway, they would
+     * make every application's question differ from the discovery's by a
+     * block of text that adds nothing -- and the score with it. So an answer
+     * equal to what the account already says is left out (the account is in
+     * CANDIDATE FACTS and in the summary already); an answer that changed is
+     * kept, because it is the person telling this employer something.
+     *
+     * <p>The covering note and the answers to the employer's own questions are
+     * always new: nothing else holds them. Empty, the whole thing is "", and
+     * the judge reads the same "none" the discovery sends.
+     */
+    static String applicationText(String coverNote, JsonNode answers, JsonNode custom, JsonNode account) {
+        List<String> lines = new ArrayList<>();
+        if (coverNote != null && !coverNote.isBlank()) {
+            lines.add("Covering note: " + cut(coverNote.strip(), 2000));
+        }
+        List<String> codes = new ArrayList<>();
+        answers.fieldNames().forEachRemaining(codes::add);
+        codes.sort(null);
+        for (String code : codes) {
+            if (NOT_MATERIAL.contains(code)) continue;
+            String value = answers.path(code).asText("").strip();
+            if (value.isBlank()) continue;
+            if (sameAsAccount(code, value, account.path(code).asText(""))) continue;
+            lines.add(code.toLowerCase(Locale.ROOT).replace('_', ' ') + ": " + cut(value, 300));
+        }
+        for (JsonNode pair : custom) {
+            String q = pair.path("q").asText("").strip();
+            JsonNode a = pair.path("a");
+            String answer;
+            if (a.isArray()) {
+                List<String> picks = new ArrayList<>();
+                a.forEach(x -> picks.add(x.asText("")));
+                answer = String.join(" | ", picks);
+            } else {
+                answer = a.asText("");
+            }
+            if (q.isBlank() || answer.isBlank()) continue;
+            lines.add("Q: " + cut(q, 300) + "\nA: " + cut(answer.strip(), 1500));
+        }
+        return String.join("\n", lines);
+    }
+
+    /** "USD 50,000" is the account's 50000 USD; an accepted contract is one the account lists. */
+    static boolean sameAsAccount(String code, String answer, String account) {
+        if (account == null || account.isBlank()) return false;
+        if ("EMPLOYMENT_KIND".equals(code)) {
+            for (String kind : account.split(",")) {
+                if (kind.strip().equalsIgnoreCase(answer.strip())) return true;
+            }
+            return false;
+        }
+        return plain(answer).equals(plain(account));
+    }
+
+    private static String plain(String text) {
+        return text.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+    }
+
+    /**
+     * Readings that finished before the score moved to the judge, scored by it.
+     *
+     * <p>Their verdicts and sentence stay; only the number is replaced, so an
+     * inbox does not hold scores from two different rules side by side. It
+     * runs on its own small batch, after the new readings, and it is not a
+     * reading: it takes nothing from the employer's monthly allowance, which
+     * counts rows, and it creates none. One that cannot be judged keeps its
+     * old score and is marked, so a profile the model will not answer about
+     * is not asked again every minute for ever.
+     */
+    /**
+     * Passes in which a re-score could not fetch a CV that exists, by
+     * screening. In memory on purpose: it only has to stop a missing file from
+     * being asked for every minute, and a restart giving three more tries is
+     * no harm.
+     */
+    private final java.util.Map<Long, Integer> cvMisses = new java.util.concurrent.ConcurrentHashMap<>();
+
+    void rejudgeDue() {
+        record Due(long id, long applicationId, Long resumeId) {}
+        List<Due> due = db.sql("""
+                select g.id, g.application_id, a.resume_id
+                  from application_screenings g
+                  join job_applications a on a.id = g.application_id
+                  join employer_postings p on p.id = a.posting_id
+                 where g.state = 'OK'
+                   and g.fit_checks is null
+                   and g.content_version = p.content_version
+                 order by g.id
+                 limit :batch
+                """)
+                .param("batch", batchSize)
+                .query((rs, n) -> new Due(rs.getLong("id"), rs.getLong("application_id"),
+                        rs.getObject("resume_id") == null ? null : rs.getLong("resume_id")))
+                .list();
+        for (Due d : due) {
+            try {
+                byte[][] cv = new byte[1][];
+                boolean[] missed = {false};
+                Scored scored = judge(d.applicationId(), () -> {
+                    if (cv[0] == null && d.resumeId() != null && !missed[0]) {
+                        cv[0] = fetchCv(d.resumeId());
+                        missed[0] = cv[0] == null;
+                    }
+                    return cv[0];
+                });
+                /* A CV that exists and did not arrive is not "no CV". Scored
+                   anyway, the person would be judged from the profile alone,
+                   for good, because of a network blip -- measured locally on
+                   20 Nov 2026, when four re-scores ran while the site that
+                   serves the files was down and all four read "nothing to
+                   summarise". The old score stays until the file comes. */
+                if (missed[0] && cvMisses.merge(d.id(), 1, Integer::sum) < 3) {
+                    continue;
+                }
+                cvMisses.remove(d.id());
+                if (scored == null) {
+                    log.warn("screening: could not re-score screening {}; it keeps its old score", d.id());
+                    db.sql("""
+                            update application_screenings
+                               set fit_checks = '{"rescore":"failed"}'::jsonb
+                             where id = :id
+                            """).param("id", d.id()).update();
+                    continue;
+                }
+                db.sql("""
+                        update application_screenings
+                           set score = :score, fit_checks = cast(:trail as jsonb),
+                               tokens_in = coalesce(tokens_in, 0) + :tin,
+                               tokens_out = coalesce(tokens_out, 0) + :tout
+                         where id = :id
+                        """)
+                        .param("score", scored.score())
+                        .param("trail", scored.trail())
+                        .param("tin", scored.tokensIn())
+                        .param("tout", scored.tokensOut())
+                        .param("id", d.id())
+                        .update();
+            } catch (Exception e) {
+                log.warn("screening: re-scoring screening {} failed: {}", d.id(), e.toString());
+            }
+        }
+    }
+
     List<Candidate> readingsDue() {
         return db.sql("""
                 select a.id, a.posting_id, p.content_version, p.employer_id, a.resume_id,
@@ -1061,6 +1359,7 @@ public class ApplicationScreener {
                        attempts = application_screenings.attempts + 1,
                        failure = null,
                        score = null,
+                       fit_checks = null,
                        summary = null,
                        tokens_in = null,
                        tokens_out = null,
@@ -1178,8 +1477,6 @@ public class ApplicationScreener {
             }
             JsonNode verdicts = root.path("verdicts");
 
-            double points = 0, possible = 0;
-            boolean essentialMissed = false;
             for (int i = 0; i < requirements.size(); i++) {
                 Requirement r = requirements.get(i);
                 String verdict = "UNKNOWN", quote = "", source = null;
@@ -1197,15 +1494,6 @@ public class ApplicationScreener {
                 quote = call.quote();
                 source = call.source();
 
-                // O peso, o meio-ponto do "não sei" e o teto do essencial
-                // contrariado moram no `FitScore`, uma vez só: a mesma regra
-                // estava escrita aqui e no DiscoveryRanker, e duas cópias de
-                // uma regra de pontuação são duas chances de divergir na
-                // única coisa que o employer lê como julgamento.
-                possible += FitScore.weight(r.essential());
-                points += FitScore.credit(verdict, r.essential());
-                if (FitScore.capsTheScore(verdict, r.essential())) essentialMissed = true;
-
                 db.sql("""
                         insert into application_requirement_verdicts
                           (screening_id, requirement_id, verdict, basis, basis_source)
@@ -1220,24 +1508,36 @@ public class ApplicationScreener {
                         .update();
             }
 
-            double score = FitScore.outOfTen(points, possible, essentialMissed);
+            /* A nota, do mesmo juiz da descoberta. Ver `judge`. Sem ela a
+               leitura não termina: uma linha OK sem número aparece na caixa
+               como 0,0, que é a pior leitura possível dita sem motivo. Falha,
+               e a próxima tentativa refaz tudo -- os vereditos desta saem no
+               começo dela, como sempre. */
+            final byte[] attached = cvUnread ? null : cv;
+            Scored scored = judge(who.applicationId(), () -> attached);
+            if (scored == null) {
+                fail(screeningId, "The model did not give a score.");
+                return;
+            }
 
             db.sql("""
                     update application_screenings
                        set state = 'OK', score = :score, summary = :summary,
                            tokens_in = :tin, tokens_out = :tout,
+                           fit_checks = cast(:trail as jsonb),
                            evaluated_at = now()
                      where id = :id
                     """)
-                    .param("score", score)
+                    .param("score", scored.score())
+                    .param("trail", scored.trail())
                     .param("summary", summary.isBlank() ? null : cut(summary, 300))
                     // O que esta leitura custou. A extração de requisitos é
                     // por vaga e não por candidatura, então ela não entra
                     // aqui: a coluna responde "quanto custou ler esta
                     // candidatura", e somar a leitura da vaga em cada uma
                     // contaria a mesma chamada dez vezes.
-                    .param("tin", answer.tokensIn())
-                    .param("tout", answer.tokensOut())
+                    .param("tin", answer.tokensIn() + scored.tokensIn())
+                    .param("tout", answer.tokensOut() + scored.tokensOut())
                     .param("id", screeningId)
                     .update();
         } catch (Exception e) {
@@ -1283,6 +1583,11 @@ public class ApplicationScreener {
      * answer — which the caller turns into "no reading", never into a verdict.
      */
     Answer ask(String prompt, byte[] pdf, int maxOutputTokens) {
+        return ask(prompt, pdf, maxOutputTokens, true);
+    }
+
+    /** As above; {@code jsonOut} false for the one prose answer, the summary. */
+    Answer ask(String prompt, byte[] pdf, int maxOutputTokens, boolean jsonOut) {
         try {
             ArrayNode parts = json.createArrayNode();
             parts.add(json.createObjectNode().put("text", prompt));
@@ -1297,8 +1602,8 @@ public class ApplicationScreener {
 
             ObjectNode config = json.createObjectNode()
                     .put("temperature", 0)
-                    .put("maxOutputTokens", maxOutputTokens)
-                    .put("responseMimeType", "application/json");
+                    .put("maxOutputTokens", maxOutputTokens);
+            if (jsonOut) config.put("responseMimeType", "application/json");
 
             ObjectNode request = json.createObjectNode();
             request.set("contents", json.createArrayNode().add(turn));

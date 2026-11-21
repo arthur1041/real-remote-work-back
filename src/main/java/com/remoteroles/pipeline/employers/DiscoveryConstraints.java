@@ -37,9 +37,19 @@ final class DiscoveryConstraints {
     /*
      * Os pesos. Escritos aqui, juntos, porque são a política inteira:
      *
-     * - Essencial não atendido leva a nota a no máximo 2,5. Não a zero: a
+     * - Essencial não atendido leva a nota para baixo de 2,5. Não a zero: a
      *   pessoa continua na lista, abaixo de todo mundo que atende, e o resumo
      *   diz o que falta — que é o que o dono pediu, "classificaria abaixo".
+     *   Desde 20 Nov 2026 é escala e não corte: o trecho de 1 a 10 é levado
+     *   para 1 a 2,5, e não mais {@code min(nota, 2,5)}. O corte empatava
+     *   todo mundo que falhava um critério e tinha mais de 2,5 -- um sênior
+     *   de 9 e um júnior de 3 liam os dois 2,5, e o desempate era a ordem dos
+     *   vetores. É o mesmo defeito que a triagem tinha com o seu 4,0, achado
+     *   no teste de ponta a ponta daquele dia. A escala parte de 1, e não de
+     *   zero, por causa de {@link DiscoveryRanker#SHOWN_FLOOR}: multiplicar
+     *   por 0,25 teria mandado para baixo de 1 -- para fora da lista -- quem o
+     *   modelo leu entre 1 e 4, que é justamente a gente que esta regra diz
+     *   que continua na lista.
      * - Essencial quase atendido (PARTIAL: 12 anos contra "15+") custa 1,5.
      *   Num corte de dez perfis isso costuma ser três ou quatro posições.
      * - Essencial que ninguém sabe custa 0,3, para que, entre dois perfis
@@ -82,7 +92,7 @@ final class DiscoveryConstraints {
             return new Adjusted(0, effects);
         }
         double deducted = 0;
-        double cap = 10;
+        boolean essentialUnmet = false;
         for (Check c : checks) {
             if (!c.constraint()) continue;
             String label = "#" + c.position() + " " + c.verdict().toLowerCase(Locale.ROOT)
@@ -91,8 +101,8 @@ final class DiscoveryConstraints {
             switch (c.verdict()) {
                 case "UNMET" -> {
                     if (c.essential()) {
-                        cap = Math.min(cap, ESSENTIAL_UNMET_CAP);
-                        effects.add(label + ": capped at " + ESSENTIAL_UNMET_CAP);
+                        essentialUnmet = true;
+                        effects.add(label + ": scaled under " + ESSENTIAL_UNMET_CAP);
                     } else {
                         deducted += OPTIONAL_UNMET;
                         effects.add(label + ": -" + OPTIONAL_UNMET);
@@ -115,7 +125,11 @@ final class DiscoveryConstraints {
         double limit = Math.min(MAX_DEDUCTION, fit / 2);
         if (deducted > limit) effects.add("deductions limited to " + Math.round(limit * 10) / 10.0);
         double score = fit - Math.min(deducted, limit);
-        score = Math.max(0, Math.min(cap, score));
+        if (essentialUnmet && score > DiscoveryRanker.SHOWN_FLOOR) {
+            double floor = DiscoveryRanker.SHOWN_FLOOR;
+            score = floor + (score - floor) * (ESSENTIAL_UNMET_CAP - floor) / (10 - floor);
+        }
+        score = Math.max(0, Math.min(10, score));
         return new Adjusted(Math.round(score * 10) / 10.0, effects);
     }
 

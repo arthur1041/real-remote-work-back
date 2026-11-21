@@ -37,8 +37,24 @@ class DiscoveryConstraintsTest {
                 List.of(constraint("UNMET", true))).score();
         double modestButMeets = DiscoveryConstraints.adjust(4.0, true,
                 List.of(constraint("MET", true))).score();
-        assertEquals(DiscoveryConstraints.ESSENTIAL_UNMET_CAP, strongButShort);
+        assertEquals(2.3, strongButShort);
+        assertTrue(strongButShort < DiscoveryConstraints.ESSENTIAL_UNMET_CAP);
         assertTrue(modestButMeets > strongButShort);
+    }
+
+    @Test
+    @DisplayName("two people who miss the same constraint keep the order the model gave them")
+    void unmetKeepsTheOrder() {
+        // Until 20 Nov 2026 this was min(score, 2.5): a 9.0 and a 3.0 both
+        // read 2.5, and which came first was the order of the vectors.
+        double senior = DiscoveryConstraints.adjust(9.0, true, List.of(constraint("UNMET", true))).score();
+        double junior = DiscoveryConstraints.adjust(3.0, true, List.of(constraint("UNMET", true))).score();
+        assertTrue(senior > junior);
+        assertEquals(1.3, junior);
+        // And nobody the model read at 1 or above falls off the list for it:
+        // the web shows from SHOWN_FLOOR up.
+        assertTrue(DiscoveryConstraints.adjust(1.2, true, List.of(constraint("UNMET", true))).score()
+                >= DiscoveryRanker.SHOWN_FLOOR);
     }
 
     @Test
