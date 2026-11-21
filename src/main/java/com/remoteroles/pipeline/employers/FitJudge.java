@@ -321,6 +321,27 @@ final class FitJudge {
                  String roleFacts, String candidateFacts) {}
 
     static Facts factsFor(JdbcClient db, long postingId, long candidateId) {
+        return factsFor(db, postingId, candidateId, null, false);
+    }
+
+    /**
+     * As above, for somebody who applied.
+     *
+     * <p><strong>The country they answered on the form wins over the
+     * account's, and not knowing is not being outside.</strong> Found in the
+     * second pass over Growth, 21 Nov 2026, the day after the screening began
+     * using this: the location check took only the account's country, and a
+     * missing one counted as outside. In the discovery that never shows --
+     * the web's filter keeps people with no country out of a regional list --
+     * but an applicant is already there, and 152 of 418 accounts declared no
+     * country in November 2026. On a role open only to a region, every one of
+     * them would have read 0.0, "Outside the role's location", including the
+     * ones who had answered the country question on that very form. Unknown
+     * now goes to the model as "not stated", and the requirement is read like
+     * any other.
+     */
+    static Facts factsFor(JdbcClient db, long postingId, long candidateId,
+                          String answeredCountry, boolean unknownCountryIsEligible) {
         return db.sql("""
                 select p.title, p.geo_scope, p.geo_detail,
                        array_to_string(p.geo_excluded, ', ') as excluded,
@@ -333,22 +354,25 @@ final class FitJudge {
                        c.available_from,
                        (
                          (p.geo_scope in ('WORLDWIDE', 'WORLDWIDE_EXCEPT')
-                          or (c.country is not null and exists (
+                          or (w.country is not null and exists (
                                 select 1 from regexp_split_to_table(upper(coalesce(p.geo_detail, '')), '[^A-Z_]+') t
                                  where t <> ''
-                                   and (t = upper(c.country)
+                                   and (t = upper(w.country)
                                         or exists (select 1 from region_countries rc
-                                                    where rc.region = t and rc.country = upper(c.country))))))
-                         and not (c.country is not null and exists (
+                                                    where rc.region = t and rc.country = upper(w.country))))))
+                         and not (w.country is not null and exists (
                                 select 1 from unnest(coalesce(p.geo_excluded, '{}'::text[])) x
-                                 where upper(x) = upper(c.country)
+                                 where upper(x) = upper(w.country)
                                     or exists (select 1 from region_countries rc
-                                                where rc.region = upper(x) and rc.country = upper(c.country))))
-                       ) as eligible
-                  from employer_postings p, candidates c
+                                                where rc.region = upper(x) and rc.country = upper(w.country))))
+                       ) as eligible,
+                       w.country is null as country_unknown
+                  from employer_postings p, candidates c,
+                       lateral (select upper(nullif(coalesce(nullif(:answered, ''), c.country), '')) as country) w
                  where p.id = :posting and c.id = :candidate
                 """)
                 .param("posting", postingId)
+                .param("answered", answeredCountry == null ? "" : answeredCountry.strip())
                 .param("candidate", candidateId)
                 .query((rs, n) -> {
                     String scope = rs.getString("geo_scope");
@@ -394,7 +418,9 @@ final class FitJudge {
                                     : rs.getObject("available_from").toString());
                     return new Facts(rs.getString("title"), rs.getString("timezone_requirement"),
                             years == null ? null : ((Number) years).intValue(),
-                            rs.getBoolean("eligible"), role, candidate);
+                            rs.getBoolean("eligible")
+                                    || (unknownCountryIsEligible && rs.getBoolean("country_unknown")),
+                            role, candidate);
                 })
                 .optional()
                 .orElse(new Facts("", null, null, true, "not available", "not available"));

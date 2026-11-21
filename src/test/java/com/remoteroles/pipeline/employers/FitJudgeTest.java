@@ -105,4 +105,18 @@ class FitJudgeTest {
         assertTrue(discovery.contains("APPLICATION\nnone"));
         assertFalse(discovery.contains("has\nnot applied"));
     }
+
+    @Test
+    @DisplayName("an edited role's extraction is shown the old list, word for word, and a new role's is not")
+    void previousListForAnEdit() {
+        // 21 Nov 2026: without it, one sentence asking nothing reworded two
+        // requirements and every application was read again.
+        assertEquals("", ApplicationScreener.previousListSection(List.of()));
+        String section = ApplicationScreener.previousListSection(List.<String[]>of(
+                new String[]{"Strong Go, used in production for at least 3 years", "true"},
+                new String[]{"Kafka", "false"}));
+        assertTrue(section.contains("- Strong Go, used in production for at least 3 years  [essential]\n"));
+        assertTrue(section.contains("- Kafka\n"));
+        assertTrue(section.contains("PREVIOUS LIST:"));
+    }
 }

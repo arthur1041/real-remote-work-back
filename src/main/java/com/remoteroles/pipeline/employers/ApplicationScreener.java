@@ -334,6 +334,67 @@ public class ApplicationScreener {
             %s
             """;
 
+    /**
+     * The list the version before this one was read into, for an edit.
+     *
+     * <p><strong>Why the model is shown it.</strong> {@link #carryForward}
+     * copies the readings only when the new list is identical, and identical
+     * is a property of the model's wording, not of the role. Measured in the
+     * second pass over Growth, 21 Nov 2026: one sentence that asks nothing
+     * ("We are a friendly team.") added to a six-requirement role came back
+     * as seven, with "Kubernetes and cloud infrastructure (AWS or GCP)" split
+     * in two and "Strong Go, used in production for at least 3 years"
+     * reworded as "3+ years of Go in production". Nothing carried: every
+     * application was read again, every score moved, and each re-read came
+     * out of the employer's monthly allowance -- a typo fix charged per
+     * applicant. Shown the old list and told to keep its words where the text
+     * still asks for the same thing, the model has a reason to be stable, and
+     * a real change still comes through as one.
+     *
+     * <p>Only the model's own lines: the field-derived ones are added by code
+     * either way. Empty for a role read for the first time.
+     */
+    List<String[]> previousRequirements(Role role) {
+        return db.sql("""
+                select text, essential
+                  from posting_requirements
+                 where posting_id = :posting
+                   and source = 'MODEL'
+                   and source_hash is not null
+                   and content_version = (
+                       select max(content_version) from posting_requirements
+                        where posting_id = :posting
+                          and content_version < :version
+                          and source_hash is not null)
+                 order by position
+                """)
+                .param("posting", role.postingId())
+                .param("version", role.contentVersion())
+                .query((rs, n) -> new String[]{rs.getString("text"),
+                        String.valueOf(rs.getBoolean("essential"))})
+                .list();
+    }
+
+    static String previousListSection(List<String[]> previous) {
+        if (previous.isEmpty()) return "";
+        StringBuilder out = new StringBuilder("""
+
+                This posting was edited. Below is the list read from the
+                version before the edit. For every requirement on it that the
+                posting still states, repeat it exactly as written here, word
+                for word, with the same "essential" value, in the same order.
+                Add a requirement only if the new text adds one; leave one out
+                only if the new text no longer states it. Rewording, merging or
+                splitting an unchanged requirement is a mistake.
+
+                PREVIOUS LIST:
+                """);
+        for (String[] r : previous) {
+            out.append("- ").append(r[0]).append("true".equals(r[1]) ? "  [essential]" : "").append('\n');
+        }
+        return out.toString();
+    }
+
     void extractDue() {
         for (Role role : rolesDue()) {
             try {
@@ -530,7 +591,8 @@ public class ApplicationScreener {
         if (!text.isBlank()) {
             String body = text.length() > MAX_CHARS ? text.substring(0, MAX_CHARS) : text;
             Answer answer = ask(REQUIREMENTS_PROMPT.formatted(
-                    role.title() == null ? "" : role.title(), body), null, 900);
+                    role.title() == null ? "" : role.title(), body)
+                    + previousListSection(previousRequirements(role)), null, 900);
             if (answer == null) {
                 log.warn("requirements for posting {} not read: the model did not answer",
                         role.postingId());
@@ -858,7 +920,8 @@ public class ApplicationScreener {
                 FitJudge.requirementsFor(db, in.postingId(), in.contentVersion());
         if (requirements.isEmpty()) return null;
         String role = FitJudge.roleFor(db, in.postingId(), in.contentVersion());
-        FitJudge.Facts facts = FitJudge.factsFor(db, in.postingId(), in.candidateId());
+        FitJudge.Facts facts = FitJudge.factsFor(db, in.postingId(), in.candidateId(),
+                json.readTree(in.answers()).path("COUNTRY").asText(""), true);
         List<FitJudge.Requirement> judged = FitJudge.judged(requirements, facts);
 
         Material material = materialFor(applicationId, in.candidateId(), cv);
