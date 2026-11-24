@@ -97,8 +97,11 @@ public class ApplicationReplySender {
                                -- may belong to somebody who never signed up,
                                -- and a candidate's answer -- often with a rate
                                -- or a phone number in it -- would go to them.
-                               case when e.email_verified_at is not null
-                                    then e.email end as reply_to
+                               -- The address the employer chose for this batch
+                               -- (V81) wins; without one, the sign-up address.
+                               coalesce(nullif(r.reply_to, ''),
+                                        case when e.email_verified_at is not null
+                                             then e.email end) as reply_to
                           from application_replies r
                           join job_applications a on a.id = r.application_id
                           join candidates c on c.id = a.candidate_id
