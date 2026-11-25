@@ -6,7 +6,9 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,7 +65,16 @@ public class DigestSender {
         this.maxJobs = maxJobs;
     }
 
-    record Role(long id, String title, String company, String location) {}
+    /**
+     * One role in the email. `employer` is the paying account behind a role in
+     * the featured block, which is what {@link #sliceFor} shares the block out
+     * by; it is 0 on the roles chosen the ordinary way, where nobody is paying.
+     */
+    record Role(long id, String title, String company, String location, long employer) {
+        Role(long id, String title, String company, String location) {
+            this(id, title, company, location, 0);
+        }
+    }
 
     /**
      * The slice of the paid list that one reader is sent.
@@ -89,19 +100,66 @@ public class DigestSender {
      * across the audience, and the issue moves everybody along next week so
      * the same reader is not sent the same five for ever.
      *
+     * <p><strong>Shared out by account, not by role.</strong> The ring used to
+     * be every paid role in one line, so an account's share of the block was
+     * its share of the roles. Measured on 24 Nov 2026: two accounts had
+     * eligible roles, one with 50 and one with 1, so the one with a single
+     * role was in 5 of every 51 readers' blocks -- about one reader in ten --
+     * and every other reader got five roles from the same account. The owner
+     * asked for the same thing the site's Featured sections already do (see
+     * `capAdvertisers` in web/lib/rotation.ts): no single employer may take
+     * the whole block while another one is paying.
+     *
+     * <p>So the block is dealt like cards. Each reader's accounts are put in
+     * an order that starts at a different account for each reader, and one
+     * role is taken from each in turn until the places are full. An account
+     * with one role is therefore in every reader's block; one with fifty fills
+     * whatever the others leave, and which of its fifty those are moves with
+     * the reader and the issue exactly as the single ring did, so all fifty
+     * still go out across the audience. Nothing is held empty: when only one
+     * account has roles, it has the whole block, because a slot nobody else
+     * can use is not taken away from the one who can.
+     *
      * <p>When there are fewer paid roles than places, everybody gets all of
-     * them and the slice is the whole list — which is the case on the day the
-     * first customer subscribes, and the case this has to be right for first.
+     * them -- still dealt in turn, so which account comes first moves between
+     * readers rather than always being the same one.
      */
     static List<Role> sliceFor(List<Role> paid, int slots, long recipientId, long issueId) {
-        if (paid.isEmpty() || paid.size() <= slots) return paid;
+        if (paid.isEmpty() || slots <= 0) return List.of();
 
-        List<Role> out = new ArrayList<>(slots);
+        Map<Long, List<Role>> byEmployer = new LinkedHashMap<>();
+        for (Role role : paid) {
+            byEmployer.computeIfAbsent(role.employer(), k -> new ArrayList<>()).add(role);
+        }
+        List<Long> employers = new ArrayList<>(byEmployer.keySet());
+        employers.sort(Long::compare);
+
         // floorMod, not %: an id is never negative today, and a negative
         // offset here would throw on the first one that was.
-        int start = (int) Math.floorMod(recipientId * 31 + issueId, paid.size());
-        for (int i = 0; i < slots; i++) {
-            out.add(paid.get((start + i) % paid.size()));
+        long offset = recipientId * 31 + issueId;
+        int first = (int) Math.floorMod(offset, employers.size());
+
+        // Each account's own roles entered at a point of their own. The
+        // employer id is mixed in so two accounts with the same number of
+        // roles do not advance in lockstep.
+        Map<Long, Integer> cursor = new LinkedHashMap<>();
+        for (long employer : employers) {
+            int size = byEmployer.get(employer).size();
+            cursor.put(employer, (int) Math.floorMod(offset + employer * 7_919, size));
+        }
+        Map<Long, Integer> taken = new LinkedHashMap<>();
+
+        int want = Math.min(slots, paid.size());
+        List<Role> out = new ArrayList<>(want);
+        while (out.size() < want) {
+            for (int i = 0; i < employers.size() && out.size() < want; i++) {
+                long employer = employers.get((first + i) % employers.size());
+                List<Role> own = byEmployer.get(employer);
+                int n = taken.getOrDefault(employer, 0);
+                if (n >= own.size()) continue;
+                out.add(own.get((cursor.get(employer) + n) % own.size()));
+                taken.put(employer, n + 1);
+            }
         }
         return out;
     }
@@ -288,15 +346,12 @@ public class DigestSender {
     }
 
     /**
-     * Roles from employers on a paid plan, for the section that says so.
+     * Roles from employers on a paid plan, for the block headed "Featured".
      *
-     * <p>**This is paid placement and the email calls it that.** The digest
-     * carries the 15 newest worldwide roles out of roughly 160 that arrive in
-     * a week, so a place in it is scarce and is otherwise decided by nothing
-     * but arrival time. Selling one is therefore buying attention, and the
-     * only honest way to sell it is in a section a reader can see is sold --
-     * which is why it is separate, labelled, and capped rather than mixed into
-     * the list above it.
+     * <p>The digest carries the 15 newest worldwide roles out of roughly 160
+     * that arrive in a week, so a place in it is scarce and is otherwise
+     * decided by nothing but arrival time. The block is separate, headed, and
+     * capped at a third of the issue rather than mixed into the list.
      *
      * <p>Nothing else about these roles is different: same worldwide-only
      * rule, same confidence floor, same person or model reading them before
@@ -332,34 +387,43 @@ public class DigestSender {
      * of the block on precisely the roles they pay for. The site's Featured
      * sections ask through `employer_postings.job_id` and so does this now.
      *
-     * <p>An `exists` rather than a join, because `employer_postings.job_id`
-     * carries no unique index: two rows pointing at one job would multiply the
-     * role in this list, and a semi-join cannot. (Production holds no such
-     * pair today; the shape is chosen so that it would not matter.)
+     * <p>A lateral `limit 1` rather than a plain join, because
+     * `employer_postings.job_id` carries no unique index: two rows pointing at
+     * one job would multiply the role in this list. (Production holds no such
+     * pair today; the shape is chosen so that it would not matter.) It was an
+     * `exists` until 24 Nov 2026, when the block started being shared out by
+     * account and so needed to know which account.
      */
     private List<Role> paidRoles(List<Role> already) {
         List<Long> seen = already.stream().map(Role::id).toList();
         return db.sql("""
                         select j.id, j.title, c.name as company,
-                               coalesce(j.location_raw, 'Anywhere in the World') as location
+                               coalesce(j.location_raw, 'Anywhere in the World') as location,
+                               payer.employer_id
                         from jobs j
                         join companies c on c.id = j.company_id
-                        where j.closed_at is null
-                          and j.is_remote is true
-                          and j.geo_scope = 'WORLDWIDE'
-                          and j.classification_confidence >= 0.5
-                          and exists (
-                              select 1
+                        -- Lateral with limit 1, so it still behaves as the
+                        -- semi-join it replaced: two postings pointing at one
+                        -- job cannot put the role in the ring twice.
+                        join lateral (
+                              select ep.employer_id
                                 from employer_postings ep
                                 join employer_subscriptions s
                                   on s.employer_id = ep.employer_id
                                where ep.job_id = j.id
-                                 -- CANCELLED conta até a data: quem pagou o
-                                 -- mês tem o mês, que é o que a V41 diz e o
-                                 -- que a página da conta já mostrava.
+                                 -- CANCELLED counts until the date: whoever
+                                 -- paid for the month has the month, which is
+                                 -- what V41 says and what the account page
+                                 -- already showed.
                                  and s.status in ('ACTIVE', 'CANCELLED')
                                  and s.expires_at > now()
-                          )
+                               order by ep.employer_id
+                               limit 1
+                        ) payer on true
+                        where j.closed_at is null
+                          and j.is_remote is true
+                          and j.geo_scope = 'WORLDWIDE'
+                          and j.classification_confidence >= 0.5
                           and (:none or not (j.id = any(:seen)))
                         -- A stable order, not a priority one. Every eligible
                         -- role goes out in this issue; what this decides is
@@ -378,7 +442,8 @@ public class DigestSender {
                         rs.getLong("id"),
                         rs.getString("title"),
                         rs.getString("company"),
-                        rs.getString("location")))
+                        rs.getString("location"),
+                        rs.getLong("employer_id")))
                 .list();
     }
 
@@ -433,19 +498,15 @@ public class DigestSender {
         String unsubscribe = "%s/unsubscribe?token=%s"
                 .formatted(siteUrl, URLEncoder.encode(person.unsubscribeToken(), StandardCharsets.UTF_8));
 
+        // Featured first, then the week's list. See html() for why.
         StringBuilder sold = new StringBuilder();
         if (!paid.isEmpty()) {
-            // Said before the roles, not after them. A label a reader meets
-            // once they have already read the list is a disclosure that
-            // arrives too late to be one.
-            sold.append("PAID PLACEMENT — these employers pay for a place in this email.\n")
-                .append("Nothing else about them is different: the same worldwide-only rule,\n")
-                .append("the same check before publishing, and the same place in the feed on\n")
-                .append("the site, where nothing can be bought.\n\n");
+            sold.append("FEATURED\n\n");
             for (Role role : paid) {
                 sold.append("  %s — %s\n     %s/jobs/%d\n\n"
                         .formatted(role.title(), role.company(), siteUrl, role.id()));
             }
+            sold.append("NEW THIS WEEK\n\n");
         }
 
         return """
@@ -453,8 +514,7 @@ public class DigestSender {
                 open to anyone, anywhere, as stated by the employer rather than \
                 guessed at from the word "remote".
 
-                %s
-                %s\
+                %s%s
                 See everything open worldwide:
 
                 %s
@@ -463,8 +523,8 @@ public class DigestSender {
                 roles. Leave at any time, in one click:
 
                 %s
-                """.formatted(roles.size(), list.toString().stripTrailing() + "\n",
-                        sold.toString(), siteUrl, unsubscribe);
+                """.formatted(roles.size(), sold.toString(),
+                        list.toString().stripTrailing() + "\n", siteUrl, unsubscribe);
     }
 
     /** The laid-out half: one row per role, the row itself being the link. */
@@ -482,12 +542,13 @@ public class DigestSender {
                     i == roles.size() - 1));
         }
 
-        /* The sold block, under a label that says what it is.
-           Below the editorial list and never mixed into it, headed with the
-           plain words rather than "featured" or "spotlight" -- a euphemism in
-           this position is the disclosure failing to be one. The sentence
-           under it says what paying did not buy, because that is the part a
-           reader has no way of checking and the part this board is sold on. */
+        /* The featured block, above the week's list and headed "Featured".
+           Until 24 Nov 2026 it sat under the list, headed "Paid placement",
+           with a sentence saying these employers paid and what paying did not
+           buy. The owner asked for it at the top and for the roles to read
+           like the others, with no explanation of payment in the email: the
+           heading is the label, the same word the site's promoted sections
+           use, and /pricing and /terms say what it is. */
         StringBuilder sold = new StringBuilder();
         if (!paid.isEmpty()) {
             StringBuilder paidRows = new StringBuilder();
@@ -499,13 +560,11 @@ public class DigestSender {
                         "%s/jobs/%d".formatted(siteUrl, role.id()),
                         i == paid.size() - 1));
             }
-            sold.append(EmailLayout.eyebrow("Paid placement"))
-                .append(EmailLayout.paragraph(
-                        "These employers pay for a place in this email. Nothing else about "
-                                + "them is different: the same worldwide-only rule, the same "
-                                + "check before publishing, and the same place in the feed on "
-                                + "the site, where nothing can be bought."))
-                .append(EmailLayout.roleList(paidRows.toString()));
+            sold.append(EmailLayout.eyebrow("Featured"))
+                .append(EmailLayout.roleList(paidRows.toString()))
+                // Without a heading of its own the week's list would read as
+                // more of the featured block.
+                .append(EmailLayout.eyebrow("New this week"));
         }
 
         String card = EmailLayout.eyebrow("This week")
@@ -515,8 +574,8 @@ public class DigestSender {
                                 + "stated by the employer rather than guessed at from the word "
                                 + "&ldquo;remote&rdquo;.",
                         true)
-                + EmailLayout.roleList(rows.toString())
                 + sold
+                + EmailLayout.roleList(rows.toString())
                 + EmailLayout.button(siteUrl, "See everything open worldwide");
 
         return EmailLayout.document(

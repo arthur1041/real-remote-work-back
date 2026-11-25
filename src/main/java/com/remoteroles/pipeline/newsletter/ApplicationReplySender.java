@@ -72,9 +72,11 @@ public class ApplicationReplySender {
      *
      * @param withdrawn whether the application was taken back after the press
      * @param deleted whether the account is gone
+     * @param replyTo the employer's address, where the candidate's answer
+     *        belongs; null when the employer never confirmed it
      */
     record Pending(long id, String to, String subject, String body,
-                   boolean withdrawn, boolean deleted) {}
+                   boolean withdrawn, boolean deleted, String replyTo) {}
 
     @Scheduled(cron = "${employer.reply.cron:*/20 * * * * *}")
     public void run() {
@@ -90,10 +92,21 @@ public class ApplicationReplySender {
         List<Pending> waiting = db.sql("""
                         select r.id, r.to_address, r.subject, r.body,
                                (a.status = 'WITHDRAWN') as withdrawn,
-                               (c.status = 'DELETED') as deleted
+                               (c.status = 'DELETED') as deleted,
+                               -- Only a confirmed address. An unconfirmed one
+                               -- may belong to somebody who never signed up,
+                               -- and a candidate's answer -- often with a rate
+                               -- or a phone number in it -- would go to them.
+                               -- The address the employer chose for this batch
+                               -- (V81) wins; without one, the sign-up address.
+                               coalesce(nullif(r.reply_to, ''),
+                                        case when e.email_verified_at is not null
+                                             then e.email end) as reply_to
                           from application_replies r
                           join job_applications a on a.id = r.application_id
                           join candidates c on c.id = a.candidate_id
+                     left join employer_postings p on p.id = a.posting_id
+                     left join employers e on e.id = p.employer_id
                          where r.sent_at is null and r.failed_at is null
                            and r.attempts < :max
                          order by r.created_at
@@ -107,7 +120,8 @@ public class ApplicationReplySender {
                         rs.getString("subject"),
                         rs.getString("body"),
                         rs.getBoolean("withdrawn"),
-                        rs.getBoolean("deleted")))
+                        rs.getBoolean("deleted"),
+                        rs.getString("reply_to")))
                 .list();
 
         if (waiting.isEmpty()) {
@@ -167,7 +181,12 @@ public class ApplicationReplySender {
              * which is right for a relay that was briefly down; after
              * `maxAttempts` it stops and says so, which is right for an
              * address or a credential that is simply wrong. */
-            boolean accepted = mailer.send(row.to(), row.subject(), row.body(), html(row.body()));
+            /* Reply-To the employer: they wrote it, and the candidate who
+               presses Reply is answering them. Until 24 Nov 2026 these went
+               without it and every answer landed in this site's own inbox,
+               unseen by the employer it was written to. */
+            boolean accepted = mailer.sendWithReplyTo(
+                    row.to(), row.replyTo(), row.subject(), row.body(), html(row.body()));
             if (!accepted) {
                 db.sql("""
                         update application_replies

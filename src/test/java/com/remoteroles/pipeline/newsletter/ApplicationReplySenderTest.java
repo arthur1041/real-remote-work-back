@@ -26,7 +26,8 @@ class ApplicationReplySenderTest {
     private static ApplicationReplySender.Pending pending(
             boolean withdrawn, boolean deleted, String to) {
         return new ApplicationReplySender.Pending(
-                1, to, "About your application", "Hi Ada,\n\nThank you.", withdrawn, deleted);
+                1, to, "About your application", "Hi Ada,\n\nThank you.", withdrawn, deleted,
+                "hiring@example.com");
     }
 
     @Test

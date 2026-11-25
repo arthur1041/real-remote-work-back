@@ -36,6 +36,26 @@ public interface Mailer {
      */
     boolean send(String to, String subject, String text, String html, String unsubscribeUrl);
 
+    /**
+     * Sends one message whose replies belong to somebody else.
+     *
+     * <p>For mail written by an employer and delivered by this site
+     * ({@link ApplicationReplySender}). It leaves from this site's address,
+     * because that is the domain that can sign it, but the person reading it
+     * is answering the employer, and without this header their answer came
+     * back to this site's inbox instead -- found on 24 Nov 2026, the day after
+     * the first seven of these went out, when a candidate's reply to an
+     * employer's two questions arrived at hello@ and nowhere else.
+     *
+     * <p>The default ignores the reply address, which is right for the logging
+     * mailer: nothing is sent, so nothing can be answered.
+     *
+     * @param replyTo where a reply should go, or null to leave it unset
+     */
+    default boolean sendWithReplyTo(String to, String replyTo, String subject, String text, String html) {
+        return send(to, subject, text, html, null);
+    }
+
     /** No unsubscribe header. For mail to the operator, which has no list to leave. */
     default boolean send(String to, String subject, String text, String html) {
         return send(to, subject, text, html, null);

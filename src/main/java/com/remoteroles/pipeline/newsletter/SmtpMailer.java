@@ -54,18 +54,18 @@ public class SmtpMailer implements Mailer {
      */
     @Override
     public boolean send(String to, String subject, String text, String html, String unsubscribeUrl) {
+        return deliver(to, null, subject, text, html, unsubscribeUrl);
+    }
+
+    @Override
+    public boolean sendWithReplyTo(String to, String replyTo, String subject, String text, String html) {
+        return deliver(to, replyTo, subject, text, html, null);
+    }
+
+    private boolean deliver(String to, String replyTo, String subject, String text, String html,
+                            String unsubscribeUrl) {
         try {
-            MimeMessage message = sender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, html != null, "UTF-8");
-            helper.setFrom(from());
-            helper.setTo(to);
-            helper.setSubject(subject);
-            addUnsubscribeHeaders(message, unsubscribeUrl);
-            if (html == null) {
-                helper.setText(text);
-            } else {
-                helper.setText(text == null ? "" : text, html);
-            }
+            MimeMessage message = compose(to, replyTo, subject, text, html, unsubscribeUrl);
             sender.send(message);
             log.info("mail sent: to={} subject=\"{}\"", LoggingMailer.redact(to), subject);
             return true;
@@ -74,6 +74,30 @@ public class SmtpMailer implements Mailer {
                     LoggingMailer.redact(to), subject, e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * The message exactly as it would leave, without sending it. Package
+     * private so the headers can be read back in a test through the same code
+     * path rather than a copy of it.
+     */
+    MimeMessage compose(String to, String replyTo, String subject, String text, String html,
+                        String unsubscribeUrl) throws Exception {
+        MimeMessage message = sender.createMimeMessage();
+        MimeMessageHelper helper = new MimeMessageHelper(message, html != null, "UTF-8");
+        helper.setFrom(from());
+        helper.setTo(to);
+        if (replyTo != null && replyTo.contains("@")) {
+            helper.setReplyTo(replyTo);
+        }
+        helper.setSubject(subject);
+        addUnsubscribeHeaders(message, unsubscribeUrl);
+        if (html == null) {
+            helper.setText(text);
+        } else {
+            helper.setText(text == null ? "" : text, html);
+        }
+        return message;
     }
 
     /**
