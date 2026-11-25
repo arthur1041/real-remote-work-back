@@ -4,6 +4,8 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -273,6 +275,7 @@ public class DigestSender {
 
         int slots = paidSlots(roles.size());
         int sent = 0;
+        boolean refer = referralLineDue(LocalDate.now(ZoneOffset.UTC));
         for (SubscriberRepository.Recipient person : audience) {
             if (!budget.claim(MailBudget.Tier.TRANSACTIONAL)) {
                 log.warn("digest truncated: the day's whole mail budget is spent after {} of {}",
@@ -283,7 +286,7 @@ public class DigestSender {
             // Each reader's own slice of the paid list. See sliceFor.
             List<Role> theirs = sliceFor(paid, slots, person.id(), issueId);
             mailer.send(person.email(), subject(roles.size()),
-                    body(roles, theirs, person), html(roles, theirs, person),
+                    body(roles, theirs, person, refer), html(roles, theirs, person, refer),
                     oneClickUnsubscribe(person.unsubscribeToken()));
             sent++;
         }
@@ -488,7 +491,24 @@ public class DigestSender {
      * seconds by someone deciding whether to click one thing, and the shape that
      * survives every mail client is the one that also survives spam filtering.
      */
-    private String body(List<Role> roles, List<Role> paid, SubscriberRepository.Recipient person) {
+    /**
+     * Whether this issue carries the one line about the referral program.
+     *
+     * <p>**Once a month, not every week**, decided with the owner on 25 Nov
+     * 2026. The weekly email is the one place a candidate already reads, so it
+     * is where the program can be mentioned at all; every week, the line would
+     * turn a list of roles into a pitch, which is the awkwardness the program
+     * has to avoid when its audience is people looking for work. The issue goes
+     * out weekly, so exactly one of them each month falls in the first seven
+     * days, and that one carries it. Always at the foot, after the roles,
+     * never in the subject or the preheader.
+     */
+    static boolean referralLineDue(LocalDate day) {
+        return day.getDayOfMonth() <= 7;
+    }
+
+    private String body(List<Role> roles, List<Role> paid, SubscriberRepository.Recipient person,
+                        boolean refer) {
         StringBuilder list = new StringBuilder();
         for (Role role : roles) {
             list.append("  %s — %s\n     %s/jobs/%d\n\n"
@@ -518,17 +538,21 @@ public class DigestSender {
                 See everything open worldwide:
 
                 %s
-
+                %s
                 You are getting this because you asked to hear about worldwide \
                 roles. Leave at any time, in one click:
 
                 %s
                 """.formatted(roles.size(), sold.toString(),
-                        list.toString().stripTrailing() + "\n", siteUrl, unsubscribe);
+                        list.toString().stripTrailing() + "\n", siteUrl,
+                        refer ? "\nKnow a company that hires remotely? Refer them and earn a "
+                                + "commission: %s/refer\n".formatted(siteUrl) : "",
+                        unsubscribe);
     }
 
     /** The laid-out half: one row per role, the row itself being the link. */
-    private String html(List<Role> roles, List<Role> paid, SubscriberRepository.Recipient person) {
+    private String html(List<Role> roles, List<Role> paid, SubscriberRepository.Recipient person,
+                        boolean refer) {
         String unsubscribe = "%s/unsubscribe?token=%s"
                 .formatted(siteUrl, URLEncoder.encode(person.unsubscribeToken(), StandardCharsets.UTF_8));
 
@@ -576,7 +600,14 @@ public class DigestSender {
                         true)
                 + sold
                 + EmailLayout.roleList(rows.toString())
-                + EmailLayout.button(siteUrl, "See everything open worldwide");
+                + EmailLayout.button(siteUrl, "See everything open worldwide")
+                // See referralLineDue: one small line, once a month, below
+                // everything the email is actually for.
+                + (refer
+                        ? EmailLayout.rule() + EmailLayout.paragraph(
+                                "Know a company that hires remotely? <a href=\"%s/refer\" style=\"color:%s;\">Refer them and earn a commission</a>."
+                                        .formatted(siteUrl, EmailLayout.BRAND_DEEP))
+                        : "");
 
         return EmailLayout.document(
                 "%d roles went up this week, open to anyone anywhere.".formatted(roles.size()),
@@ -608,6 +639,8 @@ public class DigestSender {
         SubscriberRepository.Recipient person =
                 new SubscriberRepository.Recipient(0, to, "preview-token");
         mailer.send(to, "[preview] " + subject(roles.size()),
-                body(roles, paid, person), html(roles, paid, person));
+                // The referral line always, so the preview shows the issue
+                // that carries it.
+                body(roles, paid, person, true), html(roles, paid, person, true));
     }
 }
