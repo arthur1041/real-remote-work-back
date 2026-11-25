@@ -72,7 +72,23 @@ public class UnreadMessageNotifier {
      * @param unread how many they have never been told about
      * @param optOutToken the candidate's one-click token; null for an employer
      */
-    record Waiting(String side, long id, String email, String name, int unread, String optOutToken) {}
+    record Waiting(String side, long id, String email, String name, int unread, String optOutToken,
+                   boolean fromSite) {
+        Waiting(String side, long id, String email, String name, int unread, String optOutToken) {
+            this(side, id, email, name, unread, optOutToken, false);
+        }
+    }
+
+    /*
+     * Since V90 a candidate's chat can also hold a thread with Actually Remote
+     * itself. The owner's own replies there are mailed like an employer's --
+     * somebody who asked a question has to learn it was answered. The
+     * automatic notes (campaign not null) never are: a reminder about a note is
+     * a second note, and the note was meant to be found in the chat, not chased
+     * into the inbox.
+     */
+    private static final String TELLS_CANDIDATE =
+            "(sender = 'EMPLOYER' or (sender = 'SITE' and campaign is null))";
 
     @Scheduled(cron = "${messages.digest.cron:0 0 9 * * *}")
     public void run() {
@@ -87,7 +103,7 @@ public class UnreadMessageNotifier {
 
         List<Waiting> waiting = db.sql("""
                         with fresh as (
-                          select m.id, m.conversation_id, m.sender, m.created_at,
+                          select m.id, m.conversation_id, m.sender, m.campaign, m.created_at,
                                  c.employer_id, c.candidate_id,
                                  c.employer_read_at, c.candidate_read_at
                             from conversation_messages m
@@ -96,9 +112,10 @@ public class UnreadMessageNotifier {
                              and m.created_at < now() - interval '1 hour'
                         ),
                         for_candidate as (
-                          select candidate_id as who, count(*) as n
+                          select candidate_id as who, count(*) as n,
+                                 bool_and(sender = 'SITE') as from_site
                             from fresh
-                           where sender = 'EMPLOYER'
+                           where %s
                              and (candidate_read_at is null or created_at > candidate_read_at)
                            group by candidate_id
                         ),
@@ -110,7 +127,7 @@ public class UnreadMessageNotifier {
                            group by employer_id
                         )
                         select 'CANDIDATE' as side, c.id, c.email, c.full_name as name,
-                               f.n as unread, c.mail_opt_out_token as token
+                               f.n as unread, c.mail_opt_out_token as token, f.from_site
                           from for_candidate f
                           join candidates c on c.id = f.who
                          where c.deleted_at is null
@@ -118,18 +135,19 @@ public class UnreadMessageNotifier {
                            and c.mail_opt_out_at is null
                         union all
                         select 'EMPLOYER' as side, e.id, e.email, e.company_name as name,
-                               f.n as unread, null as token
+                               f.n as unread, null as token, false as from_site
                           from for_employer f
                           join employers e on e.id = f.who
                          where e.status = 'ACTIVE'
-                        """)
+                        """.formatted(TELLS_CANDIDATE))
                 .query((rs, n) -> new Waiting(
                         rs.getString("side"),
                         rs.getLong("id"),
                         rs.getString("email"),
                         rs.getString("name"),
                         rs.getInt("unread"),
-                        rs.getString("token")))
+                        rs.getString("token"),
+                        rs.getBoolean("from_site")))
                 .list();
 
         if (waiting.isEmpty()) {
@@ -179,10 +197,10 @@ public class UnreadMessageNotifier {
                          where c.id = m.conversation_id
                            and m.notified_at is null
                            and m.created_at < now() - interval '1 hour'
-                           and m.sender = :from
+                           and m.sender in (:from)
                            and c.%s = :who
                         """.formatted(candidate ? "candidate_id" : "employer_id"))
-                .param("from", candidate ? "EMPLOYER" : "CANDIDATE")
+                .param("from", candidate ? List.of("EMPLOYER", "SITE") : List.of("CANDIDATE"))
                 .param("who", row.id())
                 .update();
     }
@@ -196,7 +214,8 @@ public class UnreadMessageNotifier {
      * already decided to look.
      */
     static String subject(Waiting row) {
-        return row.unread() == 1 ? "A message about your application" : "Messages waiting for you";
+        if (row.unread() != 1) return "Messages waiting for you";
+        return row.fromSite() ? "A reply from Actually Remote" : "A message about your application";
     }
 
     private String home(Waiting row) {
