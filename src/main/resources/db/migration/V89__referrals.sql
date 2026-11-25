@@ -1,6 +1,9 @@
--- Referrals: a candidate's link brings an employer, the employer subscribes to
--- Growth straight away, the candidate earns a fixed amount -- US$25 for a
--- monthly subscription and US$100 for an annual one (owner, 22 Nov 2026).
+-- Referrals: a candidate's link or code brings an employer, the employer pays
+-- for a plan -- straight away or after time on Free -- and the candidate earns
+-- a fixed amount: Starter US$5 monthly or US$20 annual, Growth US$25 monthly or
+-- US$100 annual. A later move up earns the difference, so one employer never
+-- earns more in total than the best plan it paid for (owner, 22 and 25 Nov
+-- 2026).
 --
 -- Four things are recorded, and each is a fact rather than a balance -- the
 -- rule the discovery quota set (C.3): a number kept in a column drifts from
@@ -12,8 +15,11 @@
 --     traced to where the traffic came from;
 --   * which employer account a link produced (employers.referred_by_*),
 --     written once, at sign-up, and never changed afterwards;
---   * what was earned (referral_earnings), one row per referred employer at
---     most, ever -- the unique index is the rule, not a convention;
+--   * what was earned (referral_earnings): one row per plan and cycle an
+--     employer first paid for, each holding only what it added over the rows
+--     before it. At most one row per employer, plan and cycle, ever -- the
+--     unique index is the rule, and it is also what makes a redelivered
+--     webhook, or a cancel-and-subscribe-again, earn nothing twice;
 --   * where the candidate wants to be paid (candidates.payout_paypal_email).
 --     PayPal only, paid by hand from the admin screen; nothing here moves
 --     money.
@@ -80,5 +86,5 @@ create table referral_earnings (
     void_reason      text,
     note             text
 );
-create unique index referral_earnings_once on referral_earnings (employer_id);
+create unique index referral_earnings_once on referral_earnings (employer_id, plan, cycle);
 create index referral_earnings_by_candidate on referral_earnings (candidate_id, created_at desc);

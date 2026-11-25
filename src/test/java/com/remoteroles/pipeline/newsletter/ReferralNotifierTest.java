@@ -48,6 +48,27 @@ class ReferralNotifierTest {
     }
 
     @Test
+    void starterIsNamedAsStarter() {
+        var n = new ReferralNotifier.Notice(1, "ana@example.com", "Ana", 500, "STARTER", "MONTHLY",
+                Instant.parse("2027-01-21T12:00:00Z"), "ana@paypal.example", false);
+        assertThat(notifier.subscribedText(n))
+                .contains("subscribed to a monthly Starter plan")
+                .contains("That earns you $5.");
+    }
+
+    @Test
+    void aMoveUpSaysSoAndCallsTheAmountAnother() {
+        // Starter then Growth: the second earning is the difference, and
+        // reading "you earned $20" for a $25 plan would look like a mistake.
+        var n = new ReferralNotifier.Notice(2, "ana@example.com", "Ana", 2000, "GROWTH", "MONTHLY",
+                Instant.parse("2027-01-21T12:00:00Z"), "ana@paypal.example", true);
+        assertThat(notifier.subscribedText(n))
+                .contains("moved up to a monthly Growth plan")
+                .contains("That earns you another $20.");
+        assertThat(notifier.subscribedHtml(n)).contains("another <strong>$20</strong>");
+    }
+
+    @Test
     void confirmedNoticeSaysWhereTheMoneyGoes() {
         var n = earning(2500, "MONTHLY", "ana@paypal.example");
         assertThat(notifier.confirmedSubject(n)).isEqualTo("Your $25 referral earning is confirmed");

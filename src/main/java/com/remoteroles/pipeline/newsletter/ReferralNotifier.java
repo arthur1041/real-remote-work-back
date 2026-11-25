@@ -19,8 +19,8 @@ import org.springframework.stereotype.Service;
  *   <li><strong>An employer created an account through it.</strong> Nothing is
  *   earned yet, and the message says so; it exists because a link nobody hears
  *   back from is a link nobody shares a second time.</li>
- *   <li><strong>That employer subscribed to Growth from the start</strong>,
- *   which is what earns -- with the amount and the date it confirms.</li>
+ *   <li><strong>That employer paid for a plan, or moved up to a better
+ *   one</strong> -- with the amount it earned and the date it confirms.</li>
  *   <li><strong>The earning confirmed</strong>: sixty days passed with the
  *   plan still running, and the money is owed. If the candidate has not given
  *   a PayPal address yet, this is the message that asks for it.</li>
@@ -61,8 +61,13 @@ public class ReferralNotifier {
     }
 
     /** One message to send: who, and the facts it states. */
-    record Notice(long id, String email, String name, int amountCents, String cycle,
-                  Instant confirmsAt, String paypal) { }
+    record Notice(long id, String email, String name, int amountCents, String plan, String cycle,
+                  Instant confirmsAt, String paypal, boolean upgrade) {
+        Notice(long id, String email, String name, int amountCents, String cycle,
+               Instant confirmsAt, String paypal) {
+            this(id, email, name, amountCents, "GROWTH", cycle, confirmsAt, paypal, false);
+        }
+    }
 
     @Scheduled(cron = "${referrals.notify.cron:0 */15 * * * *}")
     public void run() {
@@ -104,8 +109,11 @@ public class ReferralNotifier {
 
     int subscriptions() {
         List<Notice> due = db.sql("""
-                select r.id, c.email, c.full_name, r.amount_cents, r.cycle, r.confirms_at,
-                       c.payout_paypal_email
+                select r.id, c.email, c.full_name, r.amount_cents, r.plan, r.cycle, r.confirms_at,
+                       c.payout_paypal_email,
+                       exists (select 1 from referral_earnings p
+                                where p.employer_id = r.employer_id
+                                  and p.created_at < r.created_at) as upgrade
                   from referral_earnings r
                   join candidates c on c.id = r.candidate_id
                  where r.subscribed_notified_at is null
@@ -115,8 +123,9 @@ public class ReferralNotifier {
                  limit 200
                 """)
                 .query((rs, n) -> new Notice(rs.getLong("id"), rs.getString("email"),
-                        rs.getString("full_name"), rs.getInt("amount_cents"), rs.getString("cycle"),
-                        rs.getTimestamp("confirms_at").toInstant(), rs.getString("payout_paypal_email")))
+                        rs.getString("full_name"), rs.getInt("amount_cents"), rs.getString("plan"),
+                        rs.getString("cycle"), rs.getTimestamp("confirms_at").toInstant(),
+                        rs.getString("payout_paypal_email"), rs.getBoolean("upgrade")))
                 .list();
         int sent = 0;
         for (Notice n : due) {
@@ -149,7 +158,7 @@ public class ReferralNotifier {
                    and c.status = 'ACTIVE'
                    and exists (select 1 from employer_subscriptions s
                                 where s.employer_id = r.employer_id
-                                  and s.plan = r.plan
+                                  and (s.plan = r.plan or (r.plan = 'STARTER' and s.plan = 'GROWTH'))
                                   and s.expires_at >= r.confirms_at)
                  order by r.confirms_at
                  limit 200
@@ -188,7 +197,19 @@ public class ReferralNotifier {
     }
 
     private static String plan(Notice n) {
-        return "ANNUAL".equals(n.cycle()) ? "an annual Growth plan" : "a monthly Growth plan";
+        String name = "STARTER".equals(n.plan()) ? "Starter" : "Growth";
+        return ("ANNUAL".equals(n.cycle()) ? "an annual " : "a monthly ") + name + " plan";
+    }
+
+    /** "subscribed to a monthly Starter plan", or "moved up to an annual Growth plan". */
+    private static String what(Notice n) {
+        return (n.upgrade() ? "moved up to " : "subscribed to ") + plan(n);
+    }
+
+    /** "That earns you $5", or, on a move up, "That earns you another $20". */
+    private static String earns(Notice n, boolean html) {
+        String amount = html ? "<strong>" + money(n.amountCents()) + "</strong>" : money(n.amountCents());
+        return "That earns you " + (n.upgrade() ? "another " : "") + amount + ".";
     }
 
     String signupSubject() {
@@ -202,8 +223,8 @@ public class ReferralNotifier {
                 An employer just created an account on Actually Remote through your \
                 referral link.
 
-                Nothing is earned yet: it counts once they subscribe to Growth. We will \
-                write again if they do.
+                Nothing is earned yet: it counts once they pay for a plan, now or later. \
+                We will write again when they do.
 
                 %s
 
@@ -217,8 +238,8 @@ public class ReferralNotifier {
                 + EmailLayout.paragraph(EmailLayout.escape(hi(n)))
                 + EmailLayout.paragraph("An employer just created an account on Actually Remote "
                         + "through your referral link.")
-                + EmailLayout.paragraph("Nothing is earned yet: it counts once they subscribe to "
-                        + "Growth. We will write again if they do.")
+                + EmailLayout.paragraph("Nothing is earned yet: it counts once they pay for a "
+                        + "plan, now or later. We will write again when they do.")
                 + EmailLayout.button(page(), "See your referrals");
         return EmailLayout.document("An employer created an account through your link.", card,
                 EmailLayout.footer(siteUrl, null,
@@ -233,7 +254,7 @@ public class ReferralNotifier {
         return """
                 %s
 
-                An employer you referred subscribed to %s. That earns you %s.
+                An employer you referred %s. %s
 
                 It confirms on %s, if they are still subscribed then, and is paid by \
                 PayPal after that.%s
@@ -241,7 +262,7 @@ public class ReferralNotifier {
                 %s
 
                 — Actually Remote
-                """.formatted(hi(n), plan(n), money(n.amountCents()), DAY.format(n.confirmsAt()),
+                """.formatted(hi(n), what(n), earns(n, false), DAY.format(n.confirmsAt()),
                 n.paypal() == null ? " Add your PayPal email on your referrals page so it can be sent." : "",
                 page());
     }
@@ -250,15 +271,14 @@ public class ReferralNotifier {
         String card = EmailLayout.eyebrow("Referrals")
                 + EmailLayout.heading("You earned " + money(n.amountCents()))
                 + EmailLayout.paragraph(EmailLayout.escape(hi(n)))
-                + EmailLayout.paragraph("An employer you referred subscribed to " + plan(n)
-                        + ". That earns you <strong>" + money(n.amountCents()) + "</strong>.")
+                + EmailLayout.paragraph("An employer you referred " + what(n) + ". " + earns(n, true))
                 + EmailLayout.paragraph("It confirms on " + DAY.format(n.confirmsAt())
                         + ", if they are still subscribed then, and is paid by PayPal after that."
                         + (n.paypal() == null
                             ? " Add your PayPal email on your referrals page so it can be sent."
                             : ""))
                 + EmailLayout.button(page(), "See your referrals");
-        return EmailLayout.document("An employer you referred subscribed to Growth.", card,
+        return EmailLayout.document("An employer you referred " + what(n) + ".", card,
                 EmailLayout.footer(siteUrl, null,
                         "You get this because you shared your referral link."));
     }
