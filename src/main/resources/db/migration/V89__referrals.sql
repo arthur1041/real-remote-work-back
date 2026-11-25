@@ -51,6 +51,10 @@ create index referral_visits_by_candidate on referral_visits (candidate_id, visi
 alter table employers
     add column referred_by_candidate_id bigint references candidates (id) on delete set null,
     add column referred_at timestamptz,
+    -- How the tie was made: the link's cookie, or the code typed into the
+    -- sign-up form when no link carried it. For the operator, to see which of
+    -- the two actually brings people.
+    add column referred_via text check (referred_via in ('LINK', 'CODE')),
     -- When the referrer was told that somebody signed up through their link.
     add column referral_notified_at timestamptz;
 create index employers_referred_by on employers (referred_by_candidate_id)
