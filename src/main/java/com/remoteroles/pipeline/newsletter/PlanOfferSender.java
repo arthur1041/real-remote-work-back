@@ -49,9 +49,13 @@ public class PlanOfferSender {
 
     record Link(String label, String url) {}
 
-    record Offer(String name, String price, List<String> lines, Link primary, Link secondary) {}
+    /** `amount`, `unit` and `detail` are the price in parts for the card; `price` is the one-line form for plain text. */
+    record Offer(String name, String price, String amount, String unit, String detail,
+                 List<String> lines, Link primary, Link secondary) {}
 
-    record Letter(String subject, String preheader, String intro, List<Offer> offers, String outro) {}
+    /** `eyebrow` and `heading` open the card; the subject is only what the inbox shows. */
+    record Letter(String subject, String eyebrow, String heading, String preheader, String intro,
+                  List<Offer> offers, String outro) {}
 
     record Pending(long id, String email, String content) {}
 
@@ -113,16 +117,23 @@ public class PlanOfferSender {
         for (JsonNode o : root.path("offers")) {
             List<String> lines = new ArrayList<>();
             o.path("lines").forEach(l -> lines.add(l.asText()));
+            JsonNode parts = o.path("priceParts");
             offers.add(new Offer(
                     o.path("name").asText(),
                     o.path("price").asText(),
+                    parts.path("amount").asText(""),
+                    parts.path("unit").asText(""),
+                    parts.path("detail").asText(""),
                     lines,
                     link(o.path("primary")),
                     link(o.path("secondary"))));
         }
         if (offers.isEmpty()) throw new IllegalArgumentException("no plans in the offer");
+        String subject = root.path("subject").asText();
         return new Letter(
-                root.path("subject").asText(),
+                subject,
+                root.path("eyebrow").asText(""),
+                root.path("heading").asText(subject),
                 root.path("preheader").asText(),
                 root.path("intro").asText(),
                 offers,
@@ -139,7 +150,9 @@ public class PlanOfferSender {
         for (Offer offer : letter.offers()) {
             out.append(offer.name().toUpperCase()).append('\n')
                .append(offer.price()).append("\n\n");
-            for (String line : offer.lines()) out.append("  - ").append(line).append('\n');
+            for (String line : offer.lines()) {
+                out.append(line.endsWith(":") ? "" : "  - ").append(line).append('\n');
+            }
             out.append('\n').append(offer.primary().label()).append(":\n")
                .append(offer.primary().url()).append("\n\n");
             if (offer.secondary() != null) {
@@ -153,31 +166,81 @@ public class PlanOfferSender {
 
     String html(Letter letter) {
         StringBuilder card = new StringBuilder()
-                .append(EmailLayout.eyebrow(letter.offers().size() == 1 ? "A plan for you" : "The paid plans"))
-                .append(EmailLayout.heading(letter.subject()))
+                .append(letter.eyebrow().isBlank() ? "" : EmailLayout.eyebrow(letter.eyebrow()))
+                .append(EmailLayout.heading(letter.heading()))
                 .append(EmailLayout.paragraph(EmailLayout.escape(letter.intro()), true));
-        for (int i = 0; i < letter.offers().size(); i++) {
-            Offer offer = letter.offers().get(i);
-            if (i > 0) card.append(EmailLayout.rule());
-            card.append(EmailLayout.eyebrow(offer.name()))
-                .append(EmailLayout.paragraph("<strong>" + EmailLayout.escape(offer.price()) + "</strong>"));
-            StringBuilder items = new StringBuilder();
-            for (String line : offer.lines()) {
-                items.append("<li style=\"margin:0 0 6px;\">").append(EmailLayout.escape(line)).append("</li>");
-            }
-            card.append("<ul style=\"margin:0 0 18px;padding-left:20px;font-size:15px;line-height:1.55;\">")
-                .append(items).append("</ul>")
-                .append(EmailLayout.button(offer.primary().url(), offer.primary().label()));
-            if (offer.secondary() != null) {
-                card.append(EmailLayout.textLink(offer.secondary().url(), offer.secondary().label()));
-            }
+        for (Offer offer : letter.offers()) {
+            card.append(planCard(offer));
         }
-        card.append(EmailLayout.rule())
-            .append(EmailLayout.paragraph(EmailLayout.escape(letter.outro())));
+        card.append(EmailLayout.paragraph(EmailLayout.escape(letter.outro())));
         return EmailLayout.document(
                 letter.preheader(),
                 card.toString(),
                 EmailLayout.footer(siteUrl, null,
                         "You are getting this because you have an employer account on Actually Remote."));
     }
+
+    /**
+     * One plan as a card: the name and the price large on a tinted band, then
+     * what it adds as a checklist, then the button. Tables throughout, because
+     * that is what survives Outlook; the rounded corners are a bonus the
+     * clients that honour them get.
+     */
+    static String planCard(Offer offer) {
+        String price = offer.amount().isBlank()
+                ? "<p style=\"margin:0;font-size:15px;font-weight:700;color:%s;\">%s</p>"
+                        .formatted(EmailLayout.INK, EmailLayout.escape(offer.price()))
+                : """
+                  <p style="margin:0;line-height:1.1;"><span style="font-size:34px;font-weight:800;letter-spacing:-0.02em;color:%s;">%s</span> <span style="font-size:15px;color:%s;">%s</span></p>
+                  <p style="margin:6px 0 0;font-size:13px;line-height:1.45;color:%s;">%s</p>
+                  """.formatted(EmailLayout.INK, EmailLayout.escape(offer.amount()),
+                        EmailLayout.MUTED, EmailLayout.escape(offer.unit()),
+                        EmailLayout.MUTED, EmailLayout.escape(offer.detail()));
+
+        StringBuilder body = new StringBuilder();
+        List<String> lines = offer.lines();
+        // A line ending in a colon ("Everything in Starter, plus:") introduces
+        // the list rather than being one of its items.
+        if (!lines.isEmpty() && lines.get(0).endsWith(":")) {
+            body.append("<p style=\"margin:0 0 10px;font-size:15px;line-height:1.5;font-weight:700;color:%s;\">%s</p>"
+                    .formatted(EmailLayout.INK, EmailLayout.escape(lines.get(0))));
+            lines = lines.subList(1, lines.size());
+        }
+        StringBuilder rows = new StringBuilder();
+        for (String line : lines) {
+            rows.append("""
+                    <tr>
+                      <td width="24" valign="top" style="padding:1px 0 9px;font-size:15px;font-weight:800;color:%s;">&#10003;</td>
+                      <td valign="top" style="padding:0 0 9px;font-size:15px;line-height:1.5;color:%s;">%s</td>
+                    </tr>
+                    """.formatted(EmailLayout.BRAND, EmailLayout.INK, EmailLayout.escape(line)));
+        }
+        body.append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"margin:0 0 10px;\">")
+            .append(rows).append("</table>")
+            .append(EmailLayout.button(offer.primary().url(), offer.primary().label()));
+        if (offer.secondary() != null) {
+            body.append(EmailLayout.textLink(offer.secondary().url(), offer.secondary().label()));
+        }
+
+        return """
+                <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 22px;border:1px solid %s;border-radius:%s;border-collapse:separate;">
+                  <tr>
+                    <td bgcolor="%s" style="padding:20px 22px 18px;background:%s;border-radius:%s %s 0 0;">
+                      <p style="margin:0 0 10px;font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:%s;">%s</p>
+                      %s
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:20px 22px 6px;">
+                      %s
+                    </td>
+                  </tr>
+                </table>
+                """.formatted(
+                        EmailLayout.LINE_ON_SURFACE, EmailLayout.RADIUS_SM,
+                        EmailLayout.BRAND_SOFT, EmailLayout.BRAND_SOFT, EmailLayout.RADIUS_SM, EmailLayout.RADIUS_SM,
+                        EmailLayout.BRAND_DEEP, EmailLayout.escape(offer.name()),
+                        price, body);
+    }
+
 }
