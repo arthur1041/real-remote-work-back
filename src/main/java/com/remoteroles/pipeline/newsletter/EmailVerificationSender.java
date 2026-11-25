@@ -44,7 +44,8 @@ public class EmailVerificationSender {
         this.siteUrl = siteUrl.endsWith("/") ? siteUrl.substring(0, siteUrl.length() - 1) : siteUrl;
     }
 
-    record Pending(long id, String email, String company, String code) {}
+    /** `link` is a reminder sent from the admin area: `code` is then a token for a URL, not six digits (V84). */
+    record Pending(long id, String email, String company, String code, boolean link) {}
 
     @Scheduled(cron = "${employer.email-verification.cron:*/15 * * * * *}")
     public void run() {
@@ -58,7 +59,8 @@ public class EmailVerificationSender {
         }
 
         List<Pending> waiting = db.sql("""
-                        select v.id, v.email, e.company_name, v.code_plain
+                        select v.id, v.email, e.company_name, v.code_plain,
+                               (v.kind = 'LINK') as link
                           from employer_email_verifications v
                           join employers e on e.id = v.employer_id
                          where v.sent_at is null and v.code_plain is not null
@@ -70,7 +72,8 @@ public class EmailVerificationSender {
                         rs.getLong("id"),
                         rs.getString("email"),
                         rs.getString("company_name"),
-                        rs.getString("code_plain")))
+                        rs.getString("code_plain"),
+                        rs.getBoolean("link")))
                 .list();
 
         if (waiting.isEmpty()) {
@@ -92,7 +95,11 @@ public class EmailVerificationSender {
                     .update() == 0) {
                 continue;
             }
-            mailer.send(row.email(), SUBJECT, body(row), html(row));
+            if (row.link()) {
+                mailer.send(row.email(), REMINDER_SUBJECT, reminderBody(row), reminderHtml(row));
+            } else {
+                mailer.send(row.email(), SUBJECT, body(row), html(row));
+            }
             sent++;
         }
 
@@ -158,9 +165,63 @@ public class EmailVerificationSender {
                 EmailLayout.footer(siteUrl, null, null));
     }
 
+    private static final String REMINDER_SUBJECT = "One step left: confirm your email address";
+
+    private String confirmUrl(Pending row) {
+        return "%s/employers/verify/link?t=%s".formatted(siteUrl, row.code());
+    }
+
+    /**
+     * The reminder, sent from the admin area to an account that registered and
+     * never typed its code. One link, which confirms the address when pressed:
+     * asking somebody who already let a code lapse to sign in and type another
+     * is the friction that lost them the first time.
+     */
+    private String reminderBody(Pending row) {
+        return """
+                Your account for %s is set up, but its email address has not been \
+                confirmed yet, so roles cannot be submitted from it.
+
+                Confirm it in one click:
+
+                %s
+
+                The link works for seven days. Confirming is also how you get told \
+                when a role is published or needs a change.
+
+                If you did not sign up, ignore this message and nothing further happens.
+
+                — Actually Remote
+                %s
+                """.formatted(row.company(), confirmUrl(row), siteUrl);
+    }
+
+    private String reminderHtml(Pending row) {
+        String card = EmailLayout.eyebrow("One step left")
+                + EmailLayout.heading("Confirm your email address")
+                + EmailLayout.paragraph(
+                        "Your account for " + EmailLayout.escape(row.company())
+                                + " is set up, but its email address has not been confirmed "
+                                + "yet, so roles cannot be submitted from it.",
+                        true)
+                + EmailLayout.button(confirmUrl(row), "Confirm my email")
+                + EmailLayout.paragraph(
+                        "The link works for seven days. Confirming is also how you get told "
+                                + "when a role is published or needs a change.")
+                + EmailLayout.paragraph(
+                        "If you did not sign up, ignore this message and nothing further happens.");
+
+        return EmailLayout.document(
+                "Confirm your email in one click.",
+                card,
+                EmailLayout.footer(siteUrl, null, null));
+    }
+
     /** Sends this template to one address, for looking at. */
     public void sendPreview(String to) {
-        Pending row = new Pending(0, to, "Northwind Systems", "048213");
+        Pending row = new Pending(0, to, "Northwind Systems", "048213", false);
         mailer.send(to, "[preview] " + SUBJECT, body(row), html(row));
+        Pending reminder = new Pending(0, to, "Northwind Systems", "preview-token-does-not-work", true);
+        mailer.send(to, "[preview] " + REMINDER_SUBJECT, reminderBody(reminder), reminderHtml(reminder));
     }
 }
