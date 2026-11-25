@@ -12,7 +12,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -30,7 +29,18 @@ class DigestPaidSlotsTest {
     private static List<DigestSender.Role> roles(int n) {
         List<DigestSender.Role> out = new ArrayList<>();
         for (int i = 1; i <= n; i++) {
-            out.add(new DigestSender.Role(i, "Role " + i, "Company " + i, "Anywhere"));
+            // One account per role: the shape the ring was first tested in.
+            out.add(new DigestSender.Role(i, "Role " + i, "Company " + i, "Anywhere", i));
+        }
+        return out;
+    }
+
+    /** `n` roles all published by one account, ids starting at `firstId`. */
+    private static List<DigestSender.Role> account(long employer, int n, long firstId) {
+        List<DigestSender.Role> out = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            long id = firstId + i;
+            out.add(new DigestSender.Role(id, "Role " + id, "Company " + employer, "Anywhere", employer));
         }
         return out;
     }
@@ -73,8 +83,8 @@ class DigestPaidSlotsTest {
             List<DigestSender.Role> paid = roles(3);
             // The day the first customer subscribes, and the case to be right
             // about first.
-            assertSame(paid, DigestSender.sliceFor(paid, 5, 1, 1));
-            assertSame(paid, DigestSender.sliceFor(paid, 5, 999, 7));
+            assertEquals(Set.copyOf(paid), Set.copyOf(DigestSender.sliceFor(paid, 5, 1, 1)));
+            assertEquals(Set.copyOf(paid), Set.copyOf(DigestSender.sliceFor(paid, 5, 999, 7)));
         }
 
         @Test
@@ -131,6 +141,74 @@ class DigestPaidSlotsTest {
             List<DigestSender.Role> paid = roles(40);
             assertEquals(DigestSender.sliceFor(paid, 5, 3, 9),
                     DigestSender.sliceFor(paid, 5, 3, 9));
+        }
+    }
+
+    @Nested
+    @DisplayName("how it is shared between accounts")
+    class Accounts {
+
+        // The pool of 24 Nov 2026: one account with 50 eligible roles, one
+        // with a single role.
+        private final List<DigestSender.Role> pool = merged(account(105, 50, 1), account(137, 1, 1000));
+
+        private static List<DigestSender.Role> merged(List<DigestSender.Role> a, List<DigestSender.Role> b) {
+            List<DigestSender.Role> out = new ArrayList<>(a);
+            out.addAll(b);
+            return out;
+        }
+
+        @Test
+        @DisplayName("puts an account with one role in every reader's block, not one in fifty-one")
+        void smallAccountReachesEveryone() {
+            for (long reader = 1; reader <= 790; reader++) {
+                List<DigestSender.Role> theirs = DigestSender.sliceFor(pool, 5, reader, 12);
+                assertEquals(5, theirs.size());
+                assertTrue(theirs.stream().anyMatch(r -> r.employer() == 137),
+                        "reader " + reader + " got five roles from one account while another was paying");
+            }
+        }
+
+        @Test
+        @DisplayName("still sends every one of the big account's roles to somebody")
+        void bigAccountStillCovered() {
+            Set<Long> reached = new HashSet<>();
+            for (long reader = 1; reader <= 790; reader++) {
+                DigestSender.sliceFor(pool, 5, reader, 12).stream()
+                        .filter(r -> r.employer() == 105)
+                        .forEach(r -> reached.add(r.id()));
+            }
+            assertEquals(50, reached.size());
+        }
+
+        @Test
+        @DisplayName("gives each of several accounts a turn before anyone gets a second")
+        void dealtInTurn() {
+            List<DigestSender.Role> three = merged(merged(account(1, 40, 1), account(2, 3, 100)), account(3, 2, 200));
+            for (long reader = 1; reader <= 200; reader++) {
+                List<DigestSender.Role> theirs = DigestSender.sliceFor(three, 5, reader, 4);
+                Set<Long> accounts = new HashSet<>();
+                theirs.subList(0, 3).forEach(r -> accounts.add(r.employer()));
+                assertEquals(Set.of(1L, 2L, 3L), accounts,
+                        "the first three places of reader " + reader + " were not one from each account");
+                assertEquals(5, Set.copyOf(theirs).size(), "a role was sent twice to one reader");
+            }
+        }
+
+        @Test
+        @DisplayName("moves which account comes first between readers")
+        void firstPlaceRotates() {
+            Set<Long> leaders = new HashSet<>();
+            for (long reader = 1; reader <= 20; reader++) {
+                leaders.add(DigestSender.sliceFor(pool, 5, reader, 12).get(0).employer());
+            }
+            assertEquals(Set.of(105L, 137L), leaders);
+        }
+
+        @Test
+        @DisplayName("leaves no place empty when only one account has roles")
+        void oneAccountFillsTheBlock() {
+            assertEquals(5, DigestSender.sliceFor(account(105, 50, 1), 5, 3, 3).size());
         }
     }
 }
