@@ -93,11 +93,21 @@ public class PostingDecisionSender {
      * @param note  what the moderator wrote, which only a rejection carries
      */
     record Decided(long id, long employerId, String email, String title, String company,
-                   String contact, boolean approved, Long jobId, String note) {
+                   String contact, boolean approved, Long jobId, String note, boolean needsWork) {
 
-        /** Employer and outcome: the two things that have to match to share a message. */
+        Decided(long id, long employerId, String email, String title, String company,
+                String contact, boolean approved, Long jobId, String note) {
+            this(id, employerId, email, title, company, contact, approved, jobId, note, false);
+        }
+
+        /**
+         * Employer and outcome: the two things that have to match to share a
+         * message. A request for a change is its own outcome (V86) -- it is
+         * written as something to fix, and a batch mixing it with refusals
+         * would have to pick one tone and be wrong for half of it.
+         */
         String groupKey() {
-            return employerId + (approved ? ":approved" : ":rejected");
+            return employerId + (approved ? ":approved" : needsWork ? ":needs-work" : ":rejected");
         }
     }
 
@@ -153,7 +163,8 @@ public class PostingDecisionSender {
         List<Decided> waiting = db.sql("""
                         select p.id, p.employer_id, e.email, p.title, e.company_name,
                                e.contact_name, p.status, p.job_id,
-                               coalesce(p.review_note, '') as review_note
+                               coalesce(p.review_note, '') as review_note,
+                               p.needs_work
                           from employer_postings p
                           join employers e on e.id = p.employer_id
                          where p.decision_notified_at is null
@@ -179,7 +190,8 @@ public class PostingDecisionSender {
                         rs.getString("contact_name"),
                         "APPROVED".equals(rs.getString("status")),
                         rs.getObject("job_id") == null ? null : rs.getLong("job_id"),
-                        rs.getString("review_note")))
+                        rs.getString("review_note"),
+                        rs.getBoolean("needs_work")))
                 .list();
 
         if (waiting.isEmpty()) {
@@ -261,8 +273,11 @@ public class PostingDecisionSender {
         if (group.size() == 1) {
             return subject(group.get(0));
         }
-        return group.get(0).approved()
-                ? "%d roles are live on Actually Remote".formatted(group.size())
+        if (group.get(0).approved()) {
+            return "%d roles are live on Actually Remote".formatted(group.size());
+        }
+        return group.get(0).needsWork()
+                ? "%d roles need one change before they go live".formatted(group.size())
                 : "%d submissions were not published".formatted(group.size());
     }
 
@@ -325,6 +340,20 @@ public class PostingDecisionSender {
             items.append("  ... %s, each with its reason in your dashboard.%n%n"
                     .formatted(remainder(group)));
         }
+        if (first.needsWork()) {
+            return greeting(first) + """
+                    %d of your roles are almost ready. Each needs one change before it \
+                    can go live, written under its title:
+
+                    %sEdit them from your dashboard and send them back — they are \
+                    reviewed again as soon as they arrive:
+
+                    %s/employers
+
+                    — Actually Remote
+                    %s
+                    """.formatted(group.size(), items, siteUrl, siteUrl);
+        }
         return greeting(first) + """
                 %d submissions were reviewed and not published, each for the reason \
                 under it:
@@ -383,11 +412,18 @@ public class PostingDecisionSender {
                    ampersand. */
                 fields.append(EmailLayout.field(row.title(), EmailLayout.escape(note(row))));
             }
-            card = EmailLayout.eyebrow("Not published")
-                    + EmailLayout.heading("%d submissions were turned down"
-                            .formatted(group.size()))
-                    + EmailLayout.paragraph(
-                            "Each was reviewed, and the reason is under its title.", true)
+            card = (first.needsWork()
+                            ? EmailLayout.eyebrow("Needs a change")
+                                    + EmailLayout.heading("%d roles are almost ready"
+                                            .formatted(group.size()))
+                                    + EmailLayout.paragraph(
+                                            "Each needs one change before it can go live. "
+                                                    + "What to change is under its title.", true)
+                            : EmailLayout.eyebrow("Not published")
+                                    + EmailLayout.heading("%d submissions were turned down"
+                                            .formatted(group.size()))
+                                    + EmailLayout.paragraph(
+                                            "Each was reviewed, and the reason is under its title.", true))
                     + fields
                     + (remainder(group).isEmpty() ? ""
                             : EmailLayout.paragraph("&hellip; " + remainder(group)
@@ -406,7 +442,9 @@ public class PostingDecisionSender {
         return EmailLayout.document(
                 first.approved()
                         ? "%d roles are live.".formatted(group.size())
-                        : "%d submissions were not published.".formatted(group.size()),
+                        : first.needsWork()
+                            ? "%d roles need one change before they go live.".formatted(group.size())
+                            : "%d submissions were not published.".formatted(group.size()),
                 card,
                 // No unsubscribe, for the same reason as the single version: this
                 // is the answer to something they submitted, not a list they
@@ -415,9 +453,15 @@ public class PostingDecisionSender {
     }
 
     private String subject(Decided row) {
-        return row.approved()
-                ? "%s is live on Actually Remote".formatted(row.title())
+        if (row.approved()) return "%s is live on Actually Remote".formatted(row.title());
+        return row.needsWork()
+                ? "One change before %s goes live".formatted(row.title())
                 : "%s was not published".formatted(row.title());
+    }
+
+    /** Straight to the form for this role, so the fix is one click from the email. */
+    private String editUrl(Decided row) {
+        return siteUrl + "/employers/post?edit=" + row.id();
     }
 
     private String roleUrl(Decided row) {
@@ -452,6 +496,21 @@ public class PostingDecisionSender {
                     """.formatted(row.title(), roleUrl(row), siteUrl, siteUrl);
         }
 
+        if (row.needsWork()) {
+            return greeting(row) + """
+                    %s is almost ready. One thing needs changing before it can go live:
+
+                      %s
+
+                    Make the change and send it back. It is reviewed again as soon as \
+                    it arrives, and nothing else needs filling in:
+
+                    %s
+
+                    — Actually Remote
+                    %s
+                    """.formatted(row.title(), note(row), editUrl(row), siteUrl);
+        }
         return greeting(row) + """
                 %s was reviewed and not published.
 
@@ -485,6 +544,16 @@ public class PostingDecisionSender {
                                         + EmailLayout.textLink(siteUrl + "/employers",
                                                 "your dashboard")
                                         + ".")
+                : row.needsWork()
+                ? EmailLayout.eyebrow("Needs a change")
+                        + EmailLayout.heading(row.title())
+                        + EmailLayout.paragraph(
+                                "It is almost ready. One thing needs changing before it can go live.", true)
+                        + EmailLayout.field("What to change", EmailLayout.escape(note(row)))
+                        + EmailLayout.button(editUrl(row), "Make the change")
+                        + EmailLayout.paragraph(
+                                "Send it back and it is reviewed again as soon as it arrives "
+                                        + "&mdash; nothing else needs filling in.")
                 : EmailLayout.eyebrow("Not published")
                         + EmailLayout.heading(row.title())
                         + EmailLayout.paragraph("It was reviewed and turned down.", true)
@@ -499,7 +568,9 @@ public class PostingDecisionSender {
         return EmailLayout.document(
                 row.approved()
                         ? "%s is live.".formatted(row.title())
-                        : "%s was not published.".formatted(row.title()),
+                        : row.needsWork()
+                                ? "One change before %s goes live.".formatted(row.title())
+                                : "%s was not published.".formatted(row.title()),
                 card,
                 // No unsubscribe. This is the answer to something they submitted,
                 // not a list they joined, and an opt-out on it would offer to
@@ -526,6 +597,7 @@ public class PostingDecisionSender {
     public void sendPreview(String to) {
         sendApprovedPreview(to);
         sendRejectedPreview(to);
+        sendNeedsWorkPreview(to);
         sendApprovedBatchPreview(to);
         sendRejectedBatchPreview(to);
     }
@@ -547,6 +619,18 @@ public class PostingDecisionSender {
                 0, 0, to, "Senior Platform Engineer", "Northwind Systems", null, false, null,
                 "The advert says candidates must be eligible to work in the EU, which does "
                         + "not match the worldwide eligibility declared on the form.");
+        mailer.send(to, "[preview] " + subject(row), body(row), html(row));
+    }
+
+    /** A request for one change (V86), which is written as something to fix. */
+    public void sendNeedsWorkPreview(String to) {
+        Decided row = new Decided(
+                0, 0, to, "Hebrew Audio Recording Project", "Northwind Systems", "Dana Whitfield",
+                false, null,
+                "The description says participants must be in Israel while recording, but the "
+                        + "role is set to \"Anyone, anywhere\". Under \"Who can apply?\", choose "
+                        + "\"One or more countries.\" and pick Israel.",
+                true);
         mailer.send(to, "[preview] " + subject(row), body(row), html(row));
     }
 
