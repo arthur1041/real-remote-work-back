@@ -20,12 +20,12 @@
 --     before it. At most one row per employer, plan and cycle, ever -- the
 --     unique index is the rule, and it is also what makes a redelivered
 --     webhook, or a cancel-and-subscribe-again, earn nothing twice;
---   * where a candidate wants to be paid (candidates.payout_paypal_email):
---     PayPal, paid by hand from the admin screen. An employer is paid in
---     credit on their own Stripe invoices, applied by the site.
+--   * where the referrer wants to be paid (payout_paypal_email, on candidates
+--     and on employers): PayPal only, paid by hand from the admin screen;
+--     nothing here moves money.
 
--- Every referral code, whoever owns it: a candidate (paid by PayPal) or, since
--- 25 Nov 2026, an employer (paid in credit on their own Stripe invoices).
+-- Every referral code, whoever owns it: a candidate or, since 25 Nov 2026, an
+-- employer. Both are paid the same way, by PayPal.
 -- One table rather than a column on each, because a code is typed into one
 -- field and has to mean exactly one person -- two unique indexes on two
 -- tables cannot stop a candidate and an employer drawing the same eight
@@ -39,11 +39,15 @@ create table referral_codes (
     check (num_nonnulls(candidate_id, employer_id) = 1)
 );
 
--- The PayPal account the candidate wants earnings sent to. Theirs to set and
+-- The PayPal account the referrer wants earnings sent to. Theirs to set and
 -- change; copied onto the earning at the moment it is paid, so a later change
--- never rewrites where an old payment went. Employers have no equivalent:
--- theirs is paid as credit.
+-- never rewrites where an old payment went. Employers are paid in money too,
+-- not in credit on their plan (owner, 25 Nov 2026): an employer who refers
+-- ten others would otherwise stop paying for years.
 alter table candidates
+    add column payout_paypal_email text,
+    add column payout_email_set_at timestamptz;
+alter table employers
     add column payout_paypal_email text,
     add column payout_email_set_at timestamptz;
 
@@ -110,16 +114,9 @@ create table referral_earnings (
     subscribed_notified_at timestamptz,
     confirmed_notified_at timestamptz,
     paid_at          timestamptz,
-    -- Where it went and the transaction id: a PayPal address and PayPal's id
-    -- for a candidate, written by whoever paid it; 'STRIPE_CREDIT' and the
-    -- customer balance transaction for an employer, written by the site.
+    -- Where it went and the PayPal transaction id, written by whoever paid it.
     paid_to          text,
     paid_reference   text,
-    -- The last time crediting an employer was tried and why it did not go
-    -- through (no Stripe customer yet, Stripe refused), for the admin screen.
-    -- Cleared when it succeeds.
-    credit_tried_at  timestamptz,
-    credit_problem   text,
     voided_at        timestamptz,
     void_reason      text,
     note             text

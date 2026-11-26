@@ -92,29 +92,22 @@ class ReferralNotifierTest {
                 .doesNotContain("company", "companyName", "employer", "employerName");
     }
 
-    private static ReferralNotifier.Notice employerReferrer(int cents) {
-        return new ReferralNotifier.Notice(1, "hire@acme.example", "Bo Chen", cents, "GROWTH", "MONTHLY",
-                Instant.parse("2027-01-21T12:00:00Z"), null, false, true);
+    private static ReferralNotifier.Notice employerReferrer(String paypal) {
+        return new ReferralNotifier.Notice(1, "hire@acme.example", "Bo Chen", 2500, "GROWTH", "MONTHLY",
+                Instant.parse("2027-01-21T12:00:00Z"), paypal, false, true);
     }
 
     @Test
-    void anEmployerReferrerIsPromisedCreditNeverPaypal() {
-        var n = employerReferrer(2500);
+    void anEmployerReferrerIsPaidByPaypalAndSentToTheirOwnPage() {
+        var n = employerReferrer(null);
         assertThat(notifier.subscribedText(n))
-                .contains("That earns you $25 in credit.")
-                .contains("taken off your next Actually Remote invoice as credit")
-                .doesNotContain("PayPal")
+                .contains("That earns you $25.")
+                .contains("is paid by PayPal")
+                .contains("Add your PayPal email")
                 .contains("https://actuallyremote.work/employers/referrals");
-        assertThat(notifier.subscribedHtml(n)).doesNotContain("PayPal");
-    }
-
-    @Test
-    void anEmployerReferrerIsToldTheCreditWasAdded() {
-        var n = employerReferrer(2500);
-        assertThat(notifier.confirmedSubject(n)).isEqualTo("Your $25 referral credit has been added");
-        assertThat(notifier.confirmedText(n))
-                .contains("has been added to your account as credit")
-                .doesNotContain("PayPal");
         assertThat(notifier.signupText(n)).contains("https://actuallyremote.work/employers/referrals");
+        assertThat(notifier.confirmedText(employerReferrer("bo@paypal.example")))
+                .contains("sent by PayPal to bo@paypal.example")
+                .doesNotContainIgnoringCase("credit");
     }
 }
