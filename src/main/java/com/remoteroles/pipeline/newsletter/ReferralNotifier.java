@@ -60,14 +60,33 @@ public class ReferralNotifier {
         this.siteUrl = siteUrl.endsWith("/") ? siteUrl.substring(0, siteUrl.length() - 1) : siteUrl;
     }
 
-    /** One message to send: who, and the facts it states. */
+    /**
+     * One message to send: who, and the facts it states.
+     *
+     * @param credit the referrer is an employer, paid in credit on their own
+     *     invoices rather than by PayPal (owner, 25 Nov 2026)
+     */
     record Notice(long id, String email, String name, int amountCents, String plan, String cycle,
-                  Instant confirmsAt, String paypal, boolean upgrade) {
+                  Instant confirmsAt, String paypal, boolean upgrade, boolean credit) {
+        Notice(long id, String email, String name, int amountCents, String plan, String cycle,
+               Instant confirmsAt, String paypal, boolean upgrade) {
+            this(id, email, name, amountCents, plan, cycle, confirmsAt, paypal, upgrade, false);
+        }
+
         Notice(long id, String email, String name, int amountCents, String cycle,
                Instant confirmsAt, String paypal) {
-            this(id, email, name, amountCents, "GROWTH", cycle, confirmsAt, paypal, false);
+            this(id, email, name, amountCents, "GROWTH", cycle, confirmsAt, paypal, false, false);
         }
     }
+
+    /*
+     * The referrer, whoever they are: a candidate (c) or, since 25 Nov 2026, an
+     * employer (re). Exactly one of the two joins finds a row.
+     */
+    private static final String WHO = """
+            coalesce(c.email, re.email) as email,
+            coalesce(c.full_name, re.contact_name) as full_name,
+            re.id is not null as credit""";
 
     @Scheduled(cron = "${referrals.notify.cron:0 */15 * * * *}")
     public void run() {
@@ -82,17 +101,19 @@ public class ReferralNotifier {
 
     int signups() {
         List<Notice> due = db.sql("""
-                select e.id, c.email, c.full_name
+                select e.id, %s
                   from employers e
-                  join candidates c on c.id = e.referred_by_candidate_id
+             left join candidates c on c.id = e.referred_by_candidate_id
+             left join employers re on re.id = e.referred_by_employer_id
                  where e.referred_at is not null
                    and e.referral_notified_at is null
-                   and c.status = 'ACTIVE'
+                   and coalesce(c.status, re.status) = 'ACTIVE'
                  order by e.referred_at
                  limit 200
-                """)
+                """.formatted(WHO))
                 .query((rs, n) -> new Notice(rs.getLong("id"), rs.getString("email"),
-                        rs.getString("full_name"), 0, null, null, null))
+                        rs.getString("full_name"), 0, null, null, null, null, false,
+                        rs.getBoolean("credit")))
                 .list();
         int sent = 0;
         for (Notice n : due) {
@@ -109,23 +130,25 @@ public class ReferralNotifier {
 
     int subscriptions() {
         List<Notice> due = db.sql("""
-                select r.id, c.email, c.full_name, r.amount_cents, r.plan, r.cycle, r.confirms_at,
+                select r.id, %s, r.amount_cents, r.plan, r.cycle, r.confirms_at,
                        c.payout_paypal_email,
                        exists (select 1 from referral_earnings p
                                 where p.employer_id = r.employer_id
                                   and p.created_at < r.created_at) as upgrade
                   from referral_earnings r
-                  join candidates c on c.id = r.candidate_id
+             left join candidates c on c.id = r.candidate_id
+             left join employers re on re.id = r.referrer_employer_id
                  where r.subscribed_notified_at is null
                    and r.status = 'PENDING'
-                   and c.status = 'ACTIVE'
+                   and coalesce(c.status, re.status) = 'ACTIVE'
                  order by r.created_at
                  limit 200
-                """)
+                """.formatted(WHO))
                 .query((rs, n) -> new Notice(rs.getLong("id"), rs.getString("email"),
                         rs.getString("full_name"), rs.getInt("amount_cents"), rs.getString("plan"),
                         rs.getString("cycle"), rs.getTimestamp("confirms_at").toInstant(),
-                        rs.getString("payout_paypal_email"), rs.getBoolean("upgrade")))
+                        rs.getString("payout_paypal_email"), rs.getBoolean("upgrade"),
+                        rs.getBoolean("credit")))
                 .list();
         int sent = 0;
         for (Notice n : due) {
@@ -145,27 +168,38 @@ public class ReferralNotifier {
      * {@code exists} is the site's {@code HELD} test, word for word: a
      * confirmation must never be announced for an earning the admin screen
      * would not let anybody pay.
+     *
+     * <p>An employer's is announced once the credit is actually on their
+     * account (paid to STRIPE_CREDIT by the site), not at the date: "it has
+     * been added" is the only sentence worth sending about credit, and a
+     * referrer with no card on file yet would otherwise be told about credit
+     * nobody could apply.
      */
     int confirmations() {
         List<Notice> due = db.sql("""
-                select r.id, c.email, c.full_name, r.amount_cents, r.cycle, r.confirms_at,
+                select r.id, %s, r.amount_cents, r.plan, r.cycle, r.confirms_at,
                        c.payout_paypal_email
                   from referral_earnings r
-                  join candidates c on c.id = r.candidate_id
+             left join candidates c on c.id = r.candidate_id
+             left join employers re on re.id = r.referrer_employer_id
                  where r.confirmed_notified_at is null
-                   and r.status = 'PENDING'
                    and r.confirms_at <= now()
-                   and c.status = 'ACTIVE'
-                   and exists (select 1 from employer_subscriptions s
-                                where s.employer_id = r.employer_id
-                                  and (s.plan = r.plan or (r.plan = 'STARTER' and s.plan = 'GROWTH'))
-                                  and s.expires_at >= r.confirms_at)
+                   and coalesce(c.status, re.status) = 'ACTIVE'
+                   and ((c.id is not null
+                         and r.status = 'PENDING'
+                         and exists (select 1 from employer_subscriptions s
+                                      where s.employer_id = r.employer_id
+                                        and (s.plan = r.plan or (r.plan = 'STARTER' and s.plan = 'GROWTH'))
+                                        and s.expires_at >= r.confirms_at))
+                     or (re.id is not null
+                         and r.status = 'PAID' and r.paid_to = 'STRIPE_CREDIT'))
                  order by r.confirms_at
                  limit 200
-                """)
+                """.formatted(WHO))
                 .query((rs, n) -> new Notice(rs.getLong("id"), rs.getString("email"),
-                        rs.getString("full_name"), rs.getInt("amount_cents"), rs.getString("cycle"),
-                        rs.getTimestamp("confirms_at").toInstant(), rs.getString("payout_paypal_email")))
+                        rs.getString("full_name"), rs.getInt("amount_cents"), rs.getString("plan"),
+                        rs.getString("cycle"), rs.getTimestamp("confirms_at").toInstant(),
+                        rs.getString("payout_paypal_email"), false, rs.getBoolean("credit")))
                 .list();
         int sent = 0;
         for (Notice n : due) {
@@ -192,8 +226,8 @@ public class ReferralNotifier {
         return "Hi " + name.trim().split("\\s+")[0] + ",";
     }
 
-    private String page() {
-        return siteUrl + "/account/referrals";
+    private String page(Notice n) {
+        return siteUrl + (n.credit() ? "/employers/referrals" : "/account/referrals");
     }
 
     private static String plan(Notice n) {
@@ -209,7 +243,8 @@ public class ReferralNotifier {
     /** "That earns you $5", or, on a move up, "That earns you another $20". */
     private static String earns(Notice n, boolean html) {
         String amount = html ? "<strong>" + money(n.amountCents()) + "</strong>" : money(n.amountCents());
-        return "That earns you " + (n.upgrade() ? "another " : "") + amount + ".";
+        return "That earns you " + (n.upgrade() ? "another " : "") + amount
+                + (n.credit() ? " in credit." : ".");
     }
 
     String signupSubject() {
@@ -229,7 +264,7 @@ public class ReferralNotifier {
                 %s
 
                 — Actually Remote
-                """.formatted(hi(n), page());
+                """.formatted(hi(n), page(n));
     }
 
     String signupHtml(Notice n) {
@@ -240,7 +275,7 @@ public class ReferralNotifier {
                         + "through your referral link.")
                 + EmailLayout.paragraph("Nothing is earned yet: it counts once they pay for a "
                         + "plan, now or later. We will write again when they do.")
-                + EmailLayout.button(page(), "See your referrals");
+                + EmailLayout.button(page(n), "See your referrals");
         return EmailLayout.document("An employer created an account through your link.", card,
                 EmailLayout.footer(siteUrl, null,
                         "You get this because you shared your referral link."));
@@ -256,15 +291,16 @@ public class ReferralNotifier {
 
                 An employer you referred %s. %s
 
-                It confirms on %s, if they are still subscribed then, and is paid by \
-                PayPal after that.%s
+                It confirms on %s, if they are still subscribed then, and %s after that.%s
 
                 %s
 
                 — Actually Remote
                 """.formatted(hi(n), what(n), earns(n, false), DAY.format(n.confirmsAt()),
-                n.paypal() == null ? " Add your PayPal email on your referrals page so it can be sent." : "",
-                page());
+                paidHow(n),
+                n.paypal() == null && !n.credit()
+                        ? " Add your PayPal email on your referrals page so it can be sent." : "",
+                page(n));
     }
 
     String subscribedHtml(Notice n) {
@@ -273,21 +309,42 @@ public class ReferralNotifier {
                 + EmailLayout.paragraph(EmailLayout.escape(hi(n)))
                 + EmailLayout.paragraph("An employer you referred " + what(n) + ". " + earns(n, true))
                 + EmailLayout.paragraph("It confirms on " + DAY.format(n.confirmsAt())
-                        + ", if they are still subscribed then, and is paid by PayPal after that."
-                        + (n.paypal() == null
+                        + ", if they are still subscribed then, and " + paidHow(n) + " after that."
+                        + (n.paypal() == null && !n.credit()
                             ? " Add your PayPal email on your referrals page so it can be sent."
                             : ""))
-                + EmailLayout.button(page(), "See your referrals");
+                + EmailLayout.button(page(n), "See your referrals");
         return EmailLayout.document("An employer you referred " + what(n) + ".", card,
                 EmailLayout.footer(siteUrl, null,
                         "You get this because you shared your referral link."));
     }
 
+    /** How the money arrives, as the end of a sentence. */
+    private static String paidHow(Notice n) {
+        return n.credit()
+                ? "is taken off your next Actually Remote invoice as credit"
+                : "is paid by PayPal";
+    }
+
     String confirmedSubject(Notice n) {
-        return "Your " + money(n.amountCents()) + " referral earning is confirmed";
+        return n.credit()
+                ? "Your " + money(n.amountCents()) + " referral credit has been added"
+                : "Your " + money(n.amountCents()) + " referral earning is confirmed";
     }
 
     String confirmedText(Notice n) {
+        if (n.credit()) {
+            return """
+                    %s
+
+                    The %s you earned for referring an employer has been added to your \
+                    account as credit. It comes off your next Actually Remote invoice.
+
+                    %s
+
+                    — Actually Remote
+                    """.formatted(hi(n), money(n.amountCents()), page(n));
+        }
         return """
                 %s
 
@@ -303,10 +360,22 @@ public class ReferralNotifier {
                         ? "To receive it, add the email address of your PayPal account on your "
                                 + "referrals page."
                         : "It will be sent by PayPal to " + n.paypal() + ".",
-                page());
+                page(n));
     }
 
     String confirmedHtml(Notice n) {
+        if (n.credit()) {
+            String card = EmailLayout.eyebrow("Referrals")
+                    + EmailLayout.heading(money(n.amountCents()) + " of credit added")
+                    + EmailLayout.paragraph(EmailLayout.escape(hi(n)))
+                    + EmailLayout.paragraph("The " + money(n.amountCents())
+                            + " you earned for referring an employer has been added to your account as"
+                            + " credit. It comes off your next Actually Remote invoice.")
+                    + EmailLayout.button(page(n), "See your referrals");
+            return EmailLayout.document("Your referral credit has been added.", card,
+                    EmailLayout.footer(siteUrl, null,
+                            "You get this because you shared your referral link."));
+        }
         String card = EmailLayout.eyebrow("Referrals")
                 + EmailLayout.heading("Your " + money(n.amountCents()) + " is confirmed")
                 + EmailLayout.paragraph(EmailLayout.escape(hi(n)))
@@ -316,7 +385,7 @@ public class ReferralNotifier {
                         ? "To receive it, add the email address of your PayPal account on your "
                                 + "referrals page."
                         : "It will be sent by PayPal to " + EmailLayout.escape(n.paypal()) + ".")
-                + EmailLayout.button(page(), n.paypal() == null ? "Add your PayPal email" : "See your referrals");
+                + EmailLayout.button(page(n), n.paypal() == null ? "Add your PayPal email" : "See your referrals");
         return EmailLayout.document("Your referral earning is confirmed.", card,
                 EmailLayout.footer(siteUrl, null,
                         "You get this because you shared your referral link."));
