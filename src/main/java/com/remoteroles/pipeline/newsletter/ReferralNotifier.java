@@ -119,7 +119,16 @@ public class ReferralNotifier {
                    set status = case when exists (
                                   select 1 from employer_subscriptions s
                                    where s.employer_id = r.employer_id
-                                     and (s.plan = r.plan or (r.plan = 'STARTER' and s.plan = 'GROWTH'))
+                                     -- Plan and billing period as one ladder
+                                     -- (COVERS in web/lib/referrals.ts): a
+                                     -- Growth monthly plan does not hold a
+                                     -- Growth annual earning.
+                                     and (case when s.plan = 'GROWTH' and s.cycle = 'ANNUAL' then 4
+                                               when s.plan = 'GROWTH' then 3
+                                               when s.cycle = 'ANNUAL' then 2 else 1 end)
+                                      >= (case when r.plan = 'GROWTH' and r.cycle = 'ANNUAL' then 4
+                                               when r.plan = 'GROWTH' then 3
+                                               when r.cycle = 'ANNUAL' then 2 else 1 end)
                                      and s.expires_at >= r.confirms_at)
                                  then 'CONFIRMED' else 'LAPSED' end,
                        settled_at = now()
@@ -162,9 +171,13 @@ public class ReferralNotifier {
     int subscriptions() {
         List<Notice> due = db.sql("""
                 select r.id, %s, r.amount_cents, r.plan, r.cycle, r.confirms_at,
+                       -- A move up only if an earlier earning still stands: one
+                       -- that lapsed or was cancelled earned nothing, and
+                       -- "another $X" would be untrue.
                        exists (select 1 from referral_earnings p
                                 where p.employer_id = r.employer_id
-                                  and p.created_at < r.created_at) as upgrade
+                                  and p.created_at < r.created_at
+                                  and p.status not in ('LAPSED', 'VOID')) as upgrade
                   from referral_earnings r
              left join candidates c on c.id = r.candidate_id
              left join employers re on re.id = r.referrer_employer_id
