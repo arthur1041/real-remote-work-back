@@ -114,7 +114,8 @@ public class ReferralNotifier {
      * still settles.
      */
     int settle() {
-        int n = db.sql("""
+        record Settled(long employerId, boolean lapsed) {}
+        List<Settled> settled = db.sql("""
                 update referral_earnings r
                    set status = case when exists (
                                   select 1 from employer_subscriptions s
@@ -134,9 +135,66 @@ public class ReferralNotifier {
                        settled_at = now()
                  where r.status = 'PENDING'
                    and r.confirms_at <= now()
-                """).update();
-        if (n > 0) log.info("referral earnings settled: {}", n);
-        return n;
+                returning r.employer_id, r.status
+                """)
+                .query((rs, i) -> new Settled(rs.getLong("employer_id"), "LAPSED".equals(rs.getString("status"))))
+                .list();
+        int earned = 0;
+        for (long employer : settled.stream().filter(Settled::lapsed).map(Settled::employerId).distinct().toList()) {
+            earned += earnWhatIsRunning(employer);
+        }
+        if (!settled.isEmpty()) {
+            log.info("referral earnings settled: {}, of which a lapse re-earned the running plan {} time(s)",
+                    settled.size(), earned);
+        }
+        return settled.size();
+    }
+
+    /**
+     * What the paid plan running now is still worth, once an earlier earning
+     * of this employer has lapsed.
+     *
+     * <p>Since 26 Nov 2026 the site counts every earning that can still pay
+     * against the cap (COMMITTED in web/lib/referrals.ts), so a plan cancelled
+     * early holds back the commission of the cheaper plan bought instead until
+     * it lapses. This is the other half: on the lapse, the best card-paid plan
+     * running now earns the difference between its worth and what still
+     * stands, with its own sixty days from when it started. Never more than
+     * the plan is worth, so never past the cap; plans granted by hand earn
+     * nothing, as everywhere else. The worths are REFERRAL_REWARD_CENTS in
+     * web/lib/referral-rules.ts -- change both together.
+     */
+    int earnWhatIsRunning(long employerId) {
+        return db.sql("""
+                insert into referral_earnings
+                  (candidate_id, referrer_employer_id, employer_id, subscription_ref,
+                   plan, cycle, amount_cents, confirms_at)
+                select e.referred_by_candidate_id, e.referred_by_employer_id, e.id, s.provider_ref,
+                       s.plan, s.cycle, s.worth - c.committed,
+                       greatest(coalesce(s.started_at, now()), now() - interval '60 days')
+                         + interval '60 days'
+                  from employers e
+                  join lateral (
+                    select x.*, case when x.plan = 'GROWTH' and x.cycle = 'ANNUAL' then 10000
+                                     when x.plan = 'GROWTH' and x.cycle = 'MONTHLY' then 2500
+                                     when x.plan = 'STARTER' and x.cycle = 'ANNUAL' then 2000
+                                     when x.plan = 'STARTER' and x.cycle = 'MONTHLY' then 500
+                                     else 0 end as worth
+                      from employer_subscriptions x
+                     where x.employer_id = e.id
+                       and x.provider = 'STRIPE'
+                       and x.expires_at > now()
+                     order by worth desc
+                     limit 1) s on true
+                  cross join lateral (
+                    select coalesce(sum(amount_cents), 0) as committed
+                      from referral_earnings
+                     where employer_id = e.id and status <> 'LAPSED') c
+                 where e.id = :id
+                   and num_nonnulls(e.referred_by_candidate_id, e.referred_by_employer_id) > 0
+                   and s.worth > c.committed
+                on conflict (employer_id, plan, cycle) where status <> 'LAPSED' do nothing
+                """).param("id", employerId).update();
     }
 
     int signups() {
@@ -276,7 +334,7 @@ public class ReferralNotifier {
     }
 
     String signupSubject() {
-        return "Someone signed up through your referral link";
+        return "Someone signed up with your referral";
     }
 
     String signupText(Notice n) {
@@ -284,7 +342,7 @@ public class ReferralNotifier {
                 %s
 
                 An employer just created an account on Actually Remote through your \
-                referral link.
+                referral link or code.
 
                 Nothing is earned yet: it counts once they pay for a plan, now or later. \
                 We will write again when they do.
@@ -297,10 +355,10 @@ public class ReferralNotifier {
 
     String signupHtml(Notice n) {
         String card = EmailLayout.eyebrow("Referrals")
-                + EmailLayout.heading("Someone signed up through your link")
+                + EmailLayout.heading("Someone signed up with your referral")
                 + EmailLayout.paragraph(EmailLayout.escape(hi(n)))
                 + EmailLayout.paragraph("An employer just created an account on Actually Remote "
-                        + "through your referral link.")
+                        + "through your referral link or code.")
                 + EmailLayout.paragraph("Nothing is earned yet: it counts once they pay for a "
                         + "plan, now or later. We will write again when they do.")
                 + EmailLayout.button(page(n), "See your referrals");
