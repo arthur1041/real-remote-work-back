@@ -15,11 +15,15 @@
 --     traced to where the traffic came from;
 --   * which employer account a link produced (employers.referred_by_*),
 --     written once, at sign-up, and never changed afterwards;
---   * what was earned (referral_earnings): one row per plan and cycle an
---     employer first paid for, each holding only what it added over the rows
---     before it. At most one row per employer, plan and cycle, ever -- the
---     unique index is the rule, and it is also what makes a redelivered
---     webhook, or a cancel-and-subscribe-again, earn nothing twice;
+--   * what was earned (referral_earnings): one row per plan and billing
+--     period an employer paid for -- a *claim* carrying that plan's full
+--     worth, with its own sixty days. When a claim confirms it pays only what
+--     takes the employer's total up to the best worth confirmed so far, so
+--     the total is always the best plan kept for sixty days, whatever order
+--     plans were bought, dropped and bought again in (26 Nov 2026; storing
+--     only the difference at purchase time broke in a new way at every
+--     review). The unique index is what makes a redelivered webhook, or a
+--     cancel-and-subscribe-again, claim nothing twice;
 --   * where the referrer wants to be paid (payout_paypal_email, on candidates
 --     and on employers): PayPal only, paid by hand from the admin screen;
 --     nothing here moves money.
@@ -99,7 +103,13 @@ create table referral_earnings (
     subscription_ref text,
     plan             text        not null,
     cycle            text        not null check (cycle in ('MONTHLY', 'ANNUAL')),
-    amount_cents     integer     not null check (amount_cents > 0),
+    -- The plan and period's full worth (Starter $5/$20, Growth $25/$100).
+    worth_cents      integer     not null check (worth_cents > 0),
+    -- What this claim pays: an estimate while PENDING (worth less the best
+    -- claim standing before it), fixed for good when it settles CONFIRMED
+    -- (worth less the best worth already confirmed or paid). Zero when a
+    -- better plan already covers it.
+    amount_cents     integer     not null check (amount_cents >= 0),
     currency         text        not null default 'USD',
     created_at       timestamptz not null default now(),
     -- Not payable before this: sixty days after the first real charge, and

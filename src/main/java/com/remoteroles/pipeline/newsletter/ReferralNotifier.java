@@ -102,99 +102,87 @@ public class ReferralNotifier {
     }
 
     /**
-     * Settles every earning whose day has come, once and for good.
+     * Settles every claim whose day has come, once and for good, oldest day
+     * first.
      *
-     * <p>CONFIRMED if the plan, or a better one, ran to {@code confirms_at};
-     * LAPSED if not -- the site's {@code HELD} test, word for word. Stored
-     * rather than worked out on every read (review, 26 Nov 2026), because the
-     * subscription row is rewritten in place when the employer changes plan:
-     * read live, a move down after the day took back a commission already
-     * confirmed and announced, and a return months later revived one that had
-     * lapsed. Runs before the mail check, so a server with mail switched off
-     * still settles.
+     * <p>Each referral earning is a claim for one plan and billing period at
+     * its full worth (26 Nov 2026). On its day it is CONFIRMED if a card-paid
+     * subscription on that rung of the ladder or higher (Starter monthly &lt;
+     * Starter annual &lt; Growth monthly &lt; Growth annual) ran to that day,
+     * and LAPSED if not. A confirmed claim pays its worth less the best worth
+     * already confirmed or paid for that employer, so the total is always the
+     * best plan kept for sixty days -- never more, whatever order plans were
+     * bought, dropped and bought again in. Storing only the difference at
+     * purchase time, as this did before, lost or over-paid money in a new
+     * sequence at every review.
+     *
+     * <p>One claim at a time, each in its own statements: a run cut short
+     * leaves the rest PENDING for the next run, and every amount is worked out
+     * from what is stored at that moment, so nothing is decided twice. Runs
+     * before the mail check, so a server with mail switched off still settles.
      */
     int settle() {
-        record Settled(long employerId, boolean lapsed) {}
-        List<Settled> settled = db.sql("""
-                update referral_earnings r
-                   set status = case when exists (
-                                  select 1 from employer_subscriptions s
-                                   where s.employer_id = r.employer_id
-                                     -- Plan and billing period as one ladder
-                                     -- (COVERS in web/lib/referrals.ts): a
-                                     -- Growth monthly plan does not hold a
-                                     -- Growth annual earning.
-                                     and (case when s.plan = 'GROWTH' and s.cycle = 'ANNUAL' then 4
-                                               when s.plan = 'GROWTH' then 3
-                                               when s.cycle = 'ANNUAL' then 2 else 1 end)
-                                      >= (case when r.plan = 'GROWTH' and r.cycle = 'ANNUAL' then 4
-                                               when r.plan = 'GROWTH' then 3
-                                               when r.cycle = 'ANNUAL' then 2 else 1 end)
-                                     and s.expires_at >= r.confirms_at)
-                                 then 'CONFIRMED' else 'LAPSED' end,
-                       settled_at = now()
-                 where r.status = 'PENDING'
-                   and r.confirms_at <= now()
-                returning r.employer_id, r.status
-                """)
-                .query((rs, i) -> new Settled(rs.getLong("employer_id"), "LAPSED".equals(rs.getString("status"))))
-                .list();
-        int earned = 0;
-        for (long employer : settled.stream().filter(Settled::lapsed).map(Settled::employerId).distinct().toList()) {
-            earned += earnWhatIsRunning(employer);
+        record Due(long id, long employerId) {}
+        List<Due> due = db.sql("""
+                select id, employer_id from referral_earnings
+                 where status = 'PENDING' and confirms_at <= now()
+                 order by confirms_at, id
+                 limit 500
+                """).query((rs, i) -> new Due(rs.getLong("id"), rs.getLong("employer_id"))).list();
+        for (Due d : due) {
+            db.sql("""
+                    update referral_earnings r
+                       set status = case when %s then 'CONFIRMED' else 'LAPSED' end,
+                           amount_cents = case when %s
+                                then greatest(0, r.worth_cents - coalesce((
+                                       select max(x.worth_cents) from referral_earnings x
+                                        where x.employer_id = r.employer_id
+                                          and x.status in ('CONFIRMED', 'PAID')), 0))
+                                else r.amount_cents end,
+                           settled_at = now()
+                     where r.id = :id and r.status = 'PENDING'
+                    """.formatted(HELD, HELD)).param("id", d.id()).update();
         }
-        if (!settled.isEmpty()) {
-            log.info("referral earnings settled: {}, of which a lapse re-earned the running plan {} time(s)",
-                    settled.size(), earned);
+        for (long employer : due.stream().map(Due::employerId).distinct().toList()) {
+            reestimate(employer);
         }
-        return settled.size();
+        if (!due.isEmpty()) log.info("referral claims settled: {}", due.size());
+        return due.size();
     }
 
-    /**
-     * What the paid plan running now is still worth, once an earlier earning
-     * of this employer has lapsed.
-     *
-     * <p>Since 26 Nov 2026 the site counts every earning that can still pay
-     * against the cap (COMMITTED in web/lib/referrals.ts), so a plan cancelled
-     * early holds back the commission of the cheaper plan bought instead until
-     * it lapses. This is the other half: on the lapse, the best card-paid plan
-     * running now earns the difference between its worth and what still
-     * stands, with its own sixty days from when it started. Never more than
-     * the plan is worth, so never past the cap; plans granted by hand earn
-     * nothing, as everywhere else. The worths are REFERRAL_REWARD_CENTS in
-     * web/lib/referral-rules.ts -- change both together.
+    /*
+     * A card-paid subscription on the claim's rung or higher that ran to its
+     * day. COVERS and HELD in web/lib/referrals.ts are the same test; change
+     * them together.
      */
-    int earnWhatIsRunning(long employerId) {
-        return db.sql("""
-                insert into referral_earnings
-                  (candidate_id, referrer_employer_id, employer_id, subscription_ref,
-                   plan, cycle, amount_cents, confirms_at)
-                select e.referred_by_candidate_id, e.referred_by_employer_id, e.id, s.provider_ref,
-                       s.plan, s.cycle, s.worth - c.committed,
-                       greatest(coalesce(s.started_at, now()), now() - interval '60 days')
-                         + interval '60 days'
-                  from employers e
-                  join lateral (
-                    select x.*, case when x.plan = 'GROWTH' and x.cycle = 'ANNUAL' then 10000
-                                     when x.plan = 'GROWTH' and x.cycle = 'MONTHLY' then 2500
-                                     when x.plan = 'STARTER' and x.cycle = 'ANNUAL' then 2000
-                                     when x.plan = 'STARTER' and x.cycle = 'MONTHLY' then 500
-                                     else 0 end as worth
-                      from employer_subscriptions x
-                     where x.employer_id = e.id
-                       and x.provider = 'STRIPE'
-                       and x.expires_at > now()
-                     order by worth desc
-                     limit 1) s on true
-                  cross join lateral (
-                    select coalesce(sum(amount_cents), 0) as committed
-                      from referral_earnings
-                     where employer_id = e.id and status <> 'LAPSED') c
-                 where e.id = :id
-                   and num_nonnulls(e.referred_by_candidate_id, e.referred_by_employer_id) > 0
-                   and s.worth > c.committed
-                on conflict (employer_id, plan, cycle) where status <> 'LAPSED' do nothing
-                """).param("id", employerId).update();
+    private static final String HELD = """
+            exists (select 1 from employer_subscriptions s
+                     where s.employer_id = r.employer_id
+                       and s.provider = 'STRIPE'
+                       and (case when s.plan = 'GROWTH' and s.cycle = 'ANNUAL' then 4
+                                 when s.plan = 'GROWTH' then 3
+                                 when s.cycle = 'ANNUAL' then 2 else 1 end)
+                        >= (case when r.plan = 'GROWTH' and r.cycle = 'ANNUAL' then 4
+                                 when r.plan = 'GROWTH' then 3
+                                 when r.cycle = 'ANNUAL' then 2 else 1 end)
+                       and s.expires_at >= r.confirms_at)""";
+
+    /**
+     * Re-estimates what an employer's still-pending claims will pay, now that
+     * some settled: worth less the best worth confirmed, paid, or pending
+     * before it. Only the estimate the pages and the "you earned" email show;
+     * the amount that is paid is fixed by {@link #settle()} on the day.
+     */
+    void reestimate(long employerId) {
+        db.sql("""
+                update referral_earnings r
+                   set amount_cents = greatest(0, r.worth_cents - coalesce((
+                         select max(x.worth_cents) from referral_earnings x
+                          where x.employer_id = r.employer_id and x.id <> r.id
+                            and (x.status in ('CONFIRMED', 'PAID')
+                                 or (x.status = 'PENDING' and x.id < r.id))), 0))
+                 where r.employer_id = :e and r.status = 'PENDING'
+                """).param("e", employerId).update();
     }
 
     int signups() {
@@ -241,6 +229,7 @@ public class ReferralNotifier {
              left join employers re on re.id = r.referrer_employer_id
                  where r.subscribed_notified_at is null
                    and r.status = 'PENDING'
+                   and r.amount_cents > 0
                    and coalesce(c.status, re.status) = 'ACTIVE'
                  order by r.created_at
                  limit 200
@@ -280,6 +269,7 @@ public class ReferralNotifier {
                    and r.confirms_at <= now()
                    and coalesce(c.status, re.status) = 'ACTIVE'
                    and r.status = 'CONFIRMED'
+                   and r.amount_cents > 0
                  order by r.confirms_at
                  limit 200
                 """.formatted(WHO))
