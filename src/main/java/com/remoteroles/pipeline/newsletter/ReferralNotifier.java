@@ -280,7 +280,8 @@ public class ReferralNotifier {
 
                 An employer you referred %s. %s
 
-                It confirms on %s, if they are still subscribed then, and is paid by \
+                It confirms on %s, if they are still on that plan or a better one then, \
+                and is paid by \
                 PayPal after that.%s
 
                 %s
@@ -298,7 +299,7 @@ public class ReferralNotifier {
                 + EmailLayout.paragraph(EmailLayout.escape(hi(n)))
                 + EmailLayout.paragraph("An employer you referred " + what(n) + ". " + earns(n, true))
                 + EmailLayout.paragraph("It confirms on " + DAY.format(n.confirmsAt())
-                        + ", if they are still subscribed then, and is paid by PayPal after that."
+                        + ", if they are still on that plan or a better one then, and is paid by PayPal after that."
                         + (n.paypal() == null
                             ? " Add your PayPal email on your referrals page so it can be sent."
                             : ""))
