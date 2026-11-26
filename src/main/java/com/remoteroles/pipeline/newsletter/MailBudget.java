@@ -65,7 +65,7 @@ public class MailBudget {
 
     public MailBudget(
             JdbcClient db,
-            @Value("${newsletter.budget.daily:280}") int daily,
+            @Value("${newsletter.budget.daily:300}") int daily,
             @Value("${newsletter.budget.transactional-reserve:60}") int reserve) {
         this.db = db;
         this.fallback = limits(daily, reserve);

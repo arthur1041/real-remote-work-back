@@ -116,7 +116,11 @@ newsletter:
 
   # The relay's daily quota, as this system understands it.
   #
-  # Set it to the plan's real limit minus a little headroom. Too low only slows
+  # Set to the plan's real limit, Brevo's 300 (owner, 25 Nov 2026: the mail
+  # sent by hand from Brevo is his to manage, and a confirmation code held
+  # back for headroom nobody used is the worse failure). Only a fallback: the
+  # value in force is newsletter_settings.mail_daily_budget, set on
+  # /admin/mail, and production already had 300 there. Too low only slows
   # the invitation queue; too high puts the system back to discovering the
   # limit by being refused, which is what this exists to stop.
   #
@@ -126,7 +130,7 @@ newsletter:
   # import cannot leave a person staring at a form whose confirmation never
   # comes.
   budget:
-    daily: ${MAIL_DAILY_BUDGET:280}
+    daily: ${MAIL_DAILY_BUDGET:300}
     transactional-reserve: ${MAIL_TRANSACTIONAL_RESERVE:60}
 
   # The single invitation sent to a recorded lead.

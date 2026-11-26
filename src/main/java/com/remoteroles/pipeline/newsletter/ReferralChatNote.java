@@ -37,7 +37,7 @@ import org.springframework.stereotype.Service;
  *   opt-out, and never to a closed, suspended or unverified account;</li>
  *   <li>at most {@value #PER_RUN} a day, so the day this ships does not put
  *   every account's badge up at once, fill the owner's inbox with the answers,
- *   or spend the next morning's mail allowance (280 a day in all, shared with
+ *   or spend the next morning's mail allowance (300 a day in all, shared with
  *   every confirmation and digest) on notices about it.</li>
  * </ul>
  *
