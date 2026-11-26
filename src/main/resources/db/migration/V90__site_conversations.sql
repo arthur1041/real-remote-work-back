@@ -25,6 +25,13 @@
 alter table conversations
     add column kind text not null default 'EMPLOYER'
         check (kind in ('EMPLOYER', 'SITE')),
+    -- How many referral notes this SITE thread has carried, and when the
+    -- last went. Kept here and not counted from the messages, because message
+    -- retention deletes a thread's messages ninety days after the last one --
+    -- the same as the reminder gap -- and counting them would start every
+    -- candidate over at the first note, for ever.
+    add column referral_notes integer not null default 0,
+    add column referral_note_at timestamptz,
     -- When the owner last read the thread, the SITE counterpart of
     -- employer_read_at.
     add column site_read_at timestamptz;

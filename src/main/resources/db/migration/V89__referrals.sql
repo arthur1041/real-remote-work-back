@@ -107,8 +107,16 @@ create table referral_earnings (
     -- a free month counts from the end of that month, because until then
     -- nobody has paid anything.
     confirms_at      timestamptz not null,
+    -- PENDING until confirms_at; then settled once, for good, by the
+    -- pipeline (ReferralNotifier.settle): CONFIRMED if the plan or a better
+    -- one ran to that day, LAPSED if not. Settled rather than worked out on
+    -- every read, because the subscription row is rewritten in place when the
+    -- employer changes plan: re-reading it later would let a move down
+    -- after the day take back a commission already confirmed, and a return
+    -- months later revive one that lapsed.
     status           text        not null default 'PENDING'
-                     check (status in ('PENDING', 'PAID', 'VOID')),
+                     check (status in ('PENDING', 'CONFIRMED', 'LAPSED', 'PAID', 'VOID')),
+    settled_at       timestamptz,
     -- When the referrer was told the employer subscribed, and when they were
     -- told the earning confirmed. ReferralNotifier claims each before sending.
     subscribed_notified_at timestamptz,
@@ -121,7 +129,11 @@ create table referral_earnings (
     void_reason      text,
     note             text
 );
-create unique index referral_earnings_once on referral_earnings (employer_id, plan, cycle);
+-- Once per employer, plan and cycle -- except a lapsed one, which earned
+-- nothing: an employer who cancelled inside the sixty days and comes back
+-- later earns that plan then, with a sixty-day hold of its own.
+create unique index referral_earnings_once on referral_earnings (employer_id, plan, cycle)
+ where status <> 'LAPSED';
 alter table referral_earnings add constraint referral_earnings_one_referrer
     check (num_nonnulls(candidate_id, referrer_employer_id) <= 1);
 create index referral_earnings_by_candidate on referral_earnings (candidate_id, created_at desc);

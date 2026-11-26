@@ -96,8 +96,38 @@ public class ReferralNotifier {
 
     /** Sends whatever is due, in the order the events happened. Returns how many went. */
     public int send() {
+        settle();
         if (!mailer.isDeliveryEnabled()) return 0;
         return signups() + subscriptions() + confirmations();
+    }
+
+    /**
+     * Settles every earning whose day has come, once and for good.
+     *
+     * <p>CONFIRMED if the plan, or a better one, ran to {@code confirms_at};
+     * LAPSED if not -- the site's {@code HELD} test, word for word. Stored
+     * rather than worked out on every read (review, 26 Nov 2026), because the
+     * subscription row is rewritten in place when the employer changes plan:
+     * read live, a move down after the day took back a commission already
+     * confirmed and announced, and a return months later revived one that had
+     * lapsed. Runs before the mail check, so a server with mail switched off
+     * still settles.
+     */
+    int settle() {
+        int n = db.sql("""
+                update referral_earnings r
+                   set status = case when exists (
+                                  select 1 from employer_subscriptions s
+                                   where s.employer_id = r.employer_id
+                                     and (s.plan = r.plan or (r.plan = 'STARTER' and s.plan = 'GROWTH'))
+                                     and s.expires_at >= r.confirms_at)
+                                 then 'CONFIRMED' else 'LAPSED' end,
+                       settled_at = now()
+                 where r.status = 'PENDING'
+                   and r.confirms_at <= now()
+                """).update();
+        if (n > 0) log.info("referral earnings settled: {}", n);
+        return n;
     }
 
     int signups() {
@@ -178,11 +208,7 @@ public class ReferralNotifier {
                  where r.confirmed_notified_at is null
                    and r.confirms_at <= now()
                    and coalesce(c.status, re.status) = 'ACTIVE'
-                   and r.status = 'PENDING'
-                   and exists (select 1 from employer_subscriptions s
-                                where s.employer_id = r.employer_id
-                                  and (s.plan = r.plan or (r.plan = 'STARTER' and s.plan = 'GROWTH'))
-                                  and s.expires_at >= r.confirms_at)
+                   and r.status = 'CONFIRMED'
                  order by r.confirms_at
                  limit 200
                 """.formatted(WHO))

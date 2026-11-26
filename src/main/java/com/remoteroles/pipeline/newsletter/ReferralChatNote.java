@@ -87,11 +87,12 @@ public class ReferralChatNote {
     public int send() {
         List<Due> due = db.sql("""
                 with notes as (
-                  select c.candidate_id, count(*) as n, max(m.created_at) as last_at
-                    from conversation_messages m
-                    join conversations c on c.id = m.conversation_id
-                   where c.kind = 'SITE' and m.campaign in ('REFERRAL_INTRO', 'REFERRAL_REMINDER')
-                   group by c.candidate_id
+                  -- Counted on the thread, not from the messages: retention
+                  -- deletes a thread's messages ninety days after the last,
+                  -- which would put everybody back at the first note.
+                  select c.candidate_id, c.referral_notes as n, c.referral_note_at as last_at
+                    from conversations c
+                   where c.kind = 'SITE'
                 )
                 select cand.id, cand.full_name, coalesce(n.n, 0) as notes
                   from candidates cand
@@ -145,7 +146,13 @@ public class ReferralChatNote {
                     .param("body", first ? intro(d.name()) : reminder(d.name()))
                     .param("campaign", first ? INTRO : REMINDER)
                     .update();
-            db.sql("update conversations set last_message_at = now() where id = :c")
+            db.sql("""
+                    update conversations
+                       set last_message_at = now(),
+                           referral_notes = referral_notes + 1,
+                           referral_note_at = now()
+                     where id = :c
+                    """)
                     .param("c", conversation)
                     .update();
             sent++;
