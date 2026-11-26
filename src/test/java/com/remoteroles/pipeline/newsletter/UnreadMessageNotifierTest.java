@@ -59,6 +59,14 @@ class UnreadMessageNotifierTest {
             assertEquals("Messages waiting for you",
                     UnreadMessageNotifier.subject(candidate(2)));
         }
+
+        @Test
+        @DisplayName("a note from the site does not claim to be about an application")
+        void fromSite() {
+            var site = new UnreadMessageNotifier.Waiting(
+                    "CANDIDATE", 1, "ada@example.com", "Ada Lovelace", 1, "tok-123", true);
+            assertEquals("A message from Actually Remote", UnreadMessageNotifier.subject(site));
+        }
     }
 
     @Nested

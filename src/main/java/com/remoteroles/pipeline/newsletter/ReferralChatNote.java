@@ -16,9 +16,10 @@ import org.springframework.stereotype.Service;
  * place a candidate opens on their own and keeps coming back to, and in-app
  * notes are how platforms of this kind tell people about a program. The note
  * arrives as a message from "Actually Remote" in the candidate's one SITE
- * conversation (V90), with the unread badge; it is not emailed --
- * {@link UnreadMessageNotifier} skips anything with a campaign -- and it is
- * not pushed, because the site's push only knows conversations with an
+ * conversation (V90), with the unread badge. If it is still unread the next
+ * morning, {@link UnreadMessageNotifier} mails the usual "you have a message"
+ * notice for it (owner, 25 Nov 2026) -- the notice, never the note itself. It
+ * is not pushed, because the site's push only knows conversations with an
  * employer.
  *
  * <p><strong>How often.</strong> Rare on purpose, because a note that repeats
@@ -35,8 +36,9 @@ import org.springframework.stereotype.Service;
  *   <li>never again to somebody who closed the conversation, which is the
  *   opt-out, and never to a closed, suspended or unverified account;</li>
  *   <li>at most {@value #PER_RUN} a day, so the day this ships does not put
- *   every account's badge up at once and fill the owner's inbox with the
- *   answers.</li>
+ *   every account's badge up at once, fill the owner's inbox with the answers,
+ *   or spend the next morning's mail allowance (280 a day in all, shared with
+ *   every confirmation and digest) on notices about it.</li>
  * </ul>
  *
  * <p>The owner reads and answers replies in /admin/messages.
@@ -49,7 +51,7 @@ public class ReferralChatNote {
     static final int FIRST_AFTER_DAYS = 3;
     static final int REMIND_EVERY_DAYS = 90;
     static final int MAX_NOTES = 4;
-    static final int PER_RUN = 150;
+    static final int PER_RUN = 50;
 
     static final String INTRO = "REFERRAL_INTRO";
     static final String REMINDER = "REFERRAL_REMINDER";
@@ -136,8 +138,8 @@ public class ReferralChatNote {
                     .single();
             boolean first = d.notesSoFar() == 0;
             db.sql("""
-                    insert into conversation_messages (conversation_id, sender, body, campaign, notified_at)
-                    values (:c, 'SITE', :body, :campaign, now())
+                    insert into conversation_messages (conversation_id, sender, body, campaign)
+                    values (:c, 'SITE', :body, :campaign)
                     """)
                     .param("c", conversation)
                     .param("body", first ? intro(d.name()) : reminder(d.name()))

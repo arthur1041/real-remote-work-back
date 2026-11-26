@@ -81,14 +81,15 @@ public class UnreadMessageNotifier {
 
     /*
      * Since V90 a candidate's chat can also hold a thread with Actually Remote
-     * itself. The owner's own replies there are mailed like an employer's --
-     * somebody who asked a question has to learn it was answered. The
-     * automatic notes (campaign not null) never are: a reminder about a note is
-     * a second note, and the note was meant to be found in the chat, not chased
-     * into the inbox.
+     * itself, and everything the site writes there is mailed like an
+     * employer's message: the owner's replies, so somebody who asked a
+     * question learns it was answered, and the automatic notes too (owner,
+     * 25 Nov 2026), so a note reaches people who do not happen to open the
+     * site that week. Same rules as any other message -- only if still unread
+     * an hour later, once per message, folded into this one daily notice, and
+     * never to somebody who opted out of mail.
      */
-    private static final String TELLS_CANDIDATE =
-            "(sender = 'EMPLOYER' or (sender = 'SITE' and campaign is null))";
+    private static final String TELLS_CANDIDATE = "sender in ('EMPLOYER', 'SITE')";
 
     @Scheduled(cron = "${messages.digest.cron:0 0 9 * * *}")
     public void run() {
@@ -215,7 +216,7 @@ public class UnreadMessageNotifier {
      */
     static String subject(Waiting row) {
         if (row.unread() != 1) return "Messages waiting for you";
-        return row.fromSite() ? "A reply from Actually Remote" : "A message about your application";
+        return row.fromSite() ? "A message from Actually Remote" : "A message about your application";
     }
 
     private String home(Waiting row) {
