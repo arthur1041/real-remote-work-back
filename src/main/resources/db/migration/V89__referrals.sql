@@ -139,12 +139,14 @@ create table referral_earnings (
     void_reason      text,
     note             text
 );
--- Once per employer, plan and cycle -- except a lapsed or cancelled claim,
--- which pays nothing: an employer who cancelled inside the sixty days, or
--- whose first payment was disputed, and comes back later claims that plan
--- again then, with a sixty-day hold of its own.
+-- Once per employer, plan and cycle -- except a lapsed claim, which paid
+-- nothing: an employer who cancelled inside the sixty days and comes back
+-- later claims that plan again then, with a sixty-day hold of its own. A
+-- cancelled (VOID) claim keeps its place on purpose: every renewal of the
+-- same subscription would otherwise claim it again within a month, and a
+-- commission cancelled for self-referral or spam would come straight back.
 create unique index referral_earnings_once on referral_earnings (employer_id, plan, cycle)
- where status not in ('LAPSED', 'VOID');
+ where status <> 'LAPSED';
 alter table referral_earnings add constraint referral_earnings_one_referrer
     check (num_nonnulls(candidate_id, referrer_employer_id) <= 1);
 create index referral_earnings_by_candidate on referral_earnings (candidate_id, created_at desc);

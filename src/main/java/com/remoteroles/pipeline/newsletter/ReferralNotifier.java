@@ -165,7 +165,10 @@ public class ReferralNotifier {
                         >= (case when r.plan = 'GROWTH' and r.cycle = 'ANNUAL' then 4
                                  when r.plan = 'GROWTH' then 3
                                  when r.cycle = 'ANNUAL' then 2 else 1 end)
-                       and s.expires_at >= r.confirms_at)""";
+                       -- A day of slack: the claim is dated from the webhook,
+                       -- moments after Stripe's billing anchor (see HELD in
+                       -- web/lib/referrals.ts).
+                       and s.expires_at >= r.confirms_at - interval '1 day')""";
 
     /**
      * Re-estimates what an employer's still-pending claims will pay, now that
