@@ -21,7 +21,7 @@ import org.springframework.stereotype.Service;
  *   back from is a link nobody shares a second time.</li>
  *   <li><strong>That employer paid for a plan, or moved up to a better
  *   one</strong> -- with the amount it earned and the date it confirms.</li>
- *   <li><strong>The earning confirmed</strong>: sixty days passed with the
+ *   <li><strong>The earning confirmed</strong>: two months passed with the
  *   plan still running, and the money is owed. If the candidate has not given
  *   a PayPal address yet, this is the message that asks for it.</li>
  * </ol>
@@ -111,7 +111,7 @@ public class ReferralNotifier {
      * Starter annual &lt; Growth monthly &lt; Growth annual) ran to that day,
      * and LAPSED if not. A confirmed claim pays its worth less the best worth
      * already confirmed or paid for that employer, so the total is always the
-     * best plan kept for sixty days -- never more, whatever order plans were
+     * best plan kept for two months -- never more, whatever order plans were
      * bought, dropped and bought again in. Storing only the difference at
      * purchase time, as this did before, lost or over-paid money in a new
      * sequence at every review.
@@ -165,10 +165,10 @@ public class ReferralNotifier {
                         >= (case when r.plan = 'GROWTH' and r.cycle = 'ANNUAL' then 4
                                  when r.plan = 'GROWTH' then 3
                                  when r.cycle = 'ANNUAL' then 2 else 1 end)
-                       -- A day of slack: the claim is dated from the webhook,
-                       -- moments after Stripe's billing anchor (see HELD in
-                       -- web/lib/referrals.ts).
-                       and s.expires_at >= r.confirms_at - interval '1 day')""";
+                       -- An hour of slack: the claim is dated from the
+                       -- webhook, moments after Stripe's billing anchor (see
+                       -- HELD in web/lib/referrals.ts).
+                       and s.expires_at >= r.confirms_at - interval '1 hour')""";
 
     /**
      * Re-estimates what an employer's still-pending claims will pay, now that
@@ -257,7 +257,7 @@ public class ReferralNotifier {
     }
 
     /**
-     * Earnings past their sixty days whose plan was still running then. The
+     * Earnings past their two months whose plan was still running then. The
      * {@code exists} is the site's {@code HELD} test, word for word: a
      * confirmation must never be announced for an earning the admin screen
      * would not let anybody pay.
